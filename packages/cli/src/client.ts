@@ -40,14 +40,41 @@ async function isDaemonHealthy(port: number): Promise<boolean> {
 export async function ensureDaemon(port: number = 7432): Promise<void> {
   if (await isDaemonHealthy(port)) return
 
-  // Not running — spawn daemon
-  const daemonPath = fileURLToPath(new URL('../../daemon/dist/index.js', import.meta.url))
-  // Fall back to looking for daemon in node_modules
-  const resolvedPath = existsSync(daemonPath)
-    ? daemonPath
-    : require.resolve('@agent-net/daemon')
+  // Not running — spawn daemon.
+  // Resolution order:
+  //   1. Monorepo / dev: sibling package dist (packages/daemon/dist/index.js)
+  //   2. npm global install: resolve @agent-net/daemon via import.meta.resolve
+  //   3. Compiled binary (bun build --compile): re-spawn self with --_daemon flag
 
-  const child = spawn(process.execPath, [resolvedPath, `--port`, String(port)], {
+  const monoPath = fileURLToPath(new URL('../../daemon/dist/index.js', import.meta.url))
+
+  let spawnExec: string
+  let spawnArgs: string[]
+
+  if (existsSync(monoPath)) {
+    // Case 1: monorepo / local dev
+    spawnExec = process.execPath
+    spawnArgs = [monoPath, `--port`, String(port)]
+  } else {
+    // Case 2: npm installed — try import.meta.resolve (ESM-safe, no require)
+    let npmDaemonPath: string | null = null
+    try {
+      npmDaemonPath = fileURLToPath(import.meta.resolve('@agent-net/daemon'))
+    } catch {
+      // Not available (compiled binary or missing package)
+    }
+
+    if (npmDaemonPath && existsSync(npmDaemonPath)) {
+      spawnExec = process.execPath
+      spawnArgs = [npmDaemonPath, `--port`, String(port)]
+    } else {
+      // Case 3: compiled binary — spawn self in daemon mode
+      spawnExec = process.argv[0]
+      spawnArgs = [`--_daemon`, `--port`, String(port)]
+    }
+  }
+
+  const child = spawn(spawnExec, spawnArgs, {
     detached: true,
     stdio: 'ignore',
     env: process.env,

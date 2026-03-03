@@ -1,6 +1,16 @@
 {
   "name": "@agent-net/skill",
   "version": "0.1.0",
-  "description": "Agent-Net skill documentation for AI agents",
-  "files": ["SKILL.md", "examples/"]
+  "description": "Agent-Net skill documentation — teaches AI agents how to use the agent-net CLI",
+  "license": "MIT",
+  "files": [
+    "SKILL.md",
+    "examples"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

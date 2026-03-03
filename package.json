@@ -10,7 +10,12 @@
     "build": "npm run build -w packages/core && npm run build -w packages/daemon && npm run build -w packages/cli",
     "test": "vitest run --reporter=verbose",
     "test:watch": "vitest --reporter=verbose",
-    "lint": "tsc --noEmit --project tsconfig.base.json"
+    "lint": "tsc --noEmit --project tsconfig.base.json",
+    "build:binary": "bun run build:binary:macos-arm64 && bun run build:binary:macos-x64 && bun run build:binary:linux-x64",
+    "build:binary:macos-arm64": "bun build --compile --target=bun-darwin-arm64 packages/cli/binary-entry.ts --outfile bin/agent-net-macos-arm64",
+    "build:binary:macos-x64": "bun build --compile --target=bun-darwin-x64 packages/cli/binary-entry.ts --outfile bin/agent-net-macos-x64",
+    "build:binary:linux-x64": "bun build --compile --target=bun-linux-x64 packages/cli/binary-entry.ts --outfile bin/agent-net-linux-x64",
+    "build:binary:windows-x64": "bun build --compile --target=bun-windows-x64 packages/cli/binary-entry.ts --outfile bin/agent-net-windows-x64.exe"
   },
   "devDependencies": {
     "@types/node": "22.13.9",

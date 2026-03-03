@@ -2,6 +2,8 @@
   "name": "@agent-net/core",
   "version": "0.1.0",
   "type": "module",
+  "description": "Core P2P networking and memory engine for agent-net (libp2p + OrbitDB)",
+  "license": "MIT",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -10,9 +12,19 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@chainsafe/libp2p-gossipsub": "14.1.2",
