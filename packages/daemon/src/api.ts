@@ -3,11 +3,33 @@
  *
  * Binds ONLY to 127.0.0.1 — never 0.0.0.0 (AC 10).
  * All error responses: { error: string, code: string }
+ *
+ * NEW ENDPOINTS (beyond original):
+ *
+ * Namespaces / site (TODO-054945bb):
+ *   GET  /resolve/:uri              — resolve an agent:// URI to a chunk
+ *   GET  /site/:peerId              — get agent profile + collections
+ *   GET  /site/:peerId/:collection  — list chunks in a collection
+ *
+ * Content linking (TODO-e07a6eaf):
+ *   GET  /memory/:id/links          — outgoing links from a chunk
+ *   GET  /memory/:id/backlinks      — chunks that link TO this chunk
+ *   POST /memory/graph              — traverse the link graph N hops
+ *
+ * Discovery / browse (TODO-a1fcd540):
+ *   GET  /discovery/peers           — known peers with topic summaries
+ *   GET  /discovery/topics          — network-wide topic aggregation
+ *   GET  /browse/:peerId            — browse remote peer's site
+ *   GET  /browse/:peerId/:collection — browse a specific collection
+ *
+ * Security diagnostics (TODO-ebb16396):
+ *   GET  /security/reputation       — peer reputation scores
+ *   DELETE /security/reputation/:peerId — clear a peer's blacklist
  */
 
 import Fastify, { type FastifyInstance } from 'fastify'
-
 import { v4 as uuidv4 } from 'uuid'
+import { peerIdFromString } from '@libp2p/peer-id'
 import type { DaemonConfig } from './config.js'
 import {
   joinNetwork,
@@ -27,17 +49,37 @@ import {
   type MemoryQuery,
   ErrorCode,
   AgentNetError,
+  // Security
+  RateLimiter,
+  ReputationStore,
+  signChunk,
+  verifyChunkSignature,
+  // URI
+  parseAgentURI,
+  isAgentURI,
+  buildAgentURI,
+  // Content graph
+  BacklinkIndex,
+  // Discovery
+  type ChunkStub,
 } from '@agent-net/core'
+import type { PrivateKey } from '@libp2p/interface'
 import { pipe } from 'it-pipe'
 import * as lp from 'it-length-prefixed'
 
-const VERSION = '0.1.0'
+const VERSION = '0.2.0'
 
 export interface DaemonState {
   config: DaemonConfig
   sessions: Map<string, NetworkSession>
   getPeerId: () => string
   startedAt: number
+  /** Agent identity private key for signing published chunks */
+  agentPrivateKey: PrivateKey
+  /** Shared rate limiter (across all sessions) */
+  rateLimiter: RateLimiter
+  /** Shared reputation store (across all sessions) */
+  reputation: ReputationStore
 }
 
 // Typed duplex for protocol handler
@@ -45,6 +87,116 @@ interface DuplexStream {
   source: AsyncIterable<Uint8Array>
   sink: (source: AsyncIterable<Uint8Array>) => Promise<void>
 }
+
+// ---------------------------------------------------------------------------
+// Security enforcement helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Check ingest security constraints for a chunk:
+ *  1. Peer not blacklisted
+ *  2. Content size within limits
+ *  3. Rate limit not exceeded
+ *  4. Signature valid (if present or required)
+ *
+ * Returns { ok: true } or { ok: false, status, error, code }.
+ */
+async function checkIngestSecurity(
+  chunk: Partial<MemoryChunk>,
+  state: DaemonState
+): Promise<{ ok: true } | { ok: false; status: number; error: string; code: string }> {
+  const { security } = state.config
+  const peerId = chunk.source?.peerId ?? ''
+
+  // 1. Blacklist check
+  if (peerId && state.reputation.isBlacklisted(peerId)) {
+    return {
+      ok: false,
+      status: 403,
+      error: `Peer ${peerId} is blacklisted`,
+      code: ErrorCode.PEER_BLACKLISTED,
+    }
+  }
+
+  // 2. Content size checks
+  const contentLen = Buffer.byteLength(chunk.content ?? '', 'utf8')
+  if (contentLen > security.maxChunkContentBytes) {
+    if (peerId) state.reputation.record(peerId, 'OVERSIZED_CONTENT')
+    return {
+      ok: false,
+      status: 413,
+      error: `content exceeds max size (${contentLen} > ${security.maxChunkContentBytes} bytes)`,
+      code: ErrorCode.CONTENT_TOO_LARGE,
+    }
+  }
+
+  const envelopeBodyLen = Buffer.byteLength(
+    chunk.contentEnvelope?.body ?? '', 'utf8'
+  )
+  if (envelopeBodyLen > security.maxEnvelopeBodyBytes) {
+    if (peerId) state.reputation.record(peerId, 'OVERSIZED_CONTENT')
+    return {
+      ok: false,
+      status: 413,
+      error: `contentEnvelope.body exceeds max size (${envelopeBodyLen} > ${security.maxEnvelopeBodyBytes} bytes)`,
+      code: ErrorCode.CONTENT_TOO_LARGE,
+    }
+  }
+
+  // 3. Rate limit
+  if (peerId && !state.rateLimiter.check(peerId)) {
+    state.reputation.record(peerId, 'RATE_LIMIT_VIOLATION')
+    state.rateLimiter.softBan(peerId, 60_000)  // 1 minute soft ban
+    return {
+      ok: false,
+      status: 429,
+      error: `Rate limit exceeded for peer ${peerId}`,
+      code: ErrorCode.RATE_LIMIT_EXCEEDED,
+    }
+  }
+
+  // 4. Signature verification (when present)
+  if (chunk.signature && peerId) {
+    try {
+      const peerIdObj = peerIdFromString(peerId)
+      const pubKey = peerIdObj.publicKey
+      if (pubKey) {
+        const valid = await verifyChunkSignature(chunk as MemoryChunk, pubKey)
+        if (!valid) {
+          state.reputation.record(peerId, 'SIGNATURE_FAILURE')
+          return {
+            ok: false,
+            status: 400,
+            error: `Signature verification failed for chunk from peer ${peerId}`,
+            code: ErrorCode.SIGNATURE_INVALID,
+          }
+        }
+      }
+    } catch (err) {
+      // If we can't verify (e.g. non-Ed25519 PeerId), warn and allow
+      console.warn('[agent-net] Could not verify chunk signature:', err)
+    }
+  } else if (!chunk.signature && security.requireSignatures) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Unsigned chunk rejected — security.requireSignatures is enabled',
+      code: ErrorCode.SIGNATURE_INVALID,
+    }
+  }
+
+  // All checks passed — record valid ingest
+  if (peerId) {
+    state.rateLimiter.record(peerId)
+    state.reputation.record(peerId, 'VALID_CONTENT')
+  }
+
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
+// API factory
+// ---------------------------------------------------------------------------
 
 export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   const app = Fastify({ logger: false })
@@ -91,15 +243,22 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     }
 
     try {
-      const session = await joinNetwork(body.psk, {
+      const session = await joinNetwork(body.psk, state.agentPrivateKey, {
         name: body.name,
         dataDir: state.config.dataDir,
+        displayName: state.config.displayName,
+        minConnections: state.config.security.minPeerConnections,
+        trustedBootstrapPeers: state.config.security.trustedBootstrapPeers,
+        subscribedTopics: state.config.subscriptions.topics,
+        subscribedPeers: state.config.subscriptions.peers,
       })
       state.sessions.set(session.id, session)
       const existing = state.config.networks.find(n => deriveNetworkId(n.psk) === networkId)
       if (!existing) {
         state.config.networks.push({ psk: body.psk, name: body.name })
       }
+      // Register query protocol for new session
+      registerQueryProtocol(session, state)
       return reply.status(201).send(sessionToDTO(session))
     } catch (err) {
       const code = err instanceof AgentNetError ? err.code : ErrorCode.JOIN_FAILED
@@ -147,7 +306,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       })
     }
 
-    const agentId = state.config.agentId ?? session.node.peerId.toString()
+    const localPeerId = state.getPeerId()
+    const agentId = state.config.agentId ?? localPeerId
 
     const chunk: MemoryChunk = {
       type: body.type ?? 'context',
@@ -156,7 +316,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       content: body.content ?? '',
       source: {
         agentId: body.source?.agentId || agentId,
-        peerId: body.source?.peerId || session.node.peerId.toString(),
+        peerId: body.source?.peerId || localPeerId,
         project: body.source?.project,
         sessionId: body.source?.sessionId,
         timestamp: body.source?.timestamp ?? Date.now(),
@@ -167,19 +327,46 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       version: 1,
       supersedes: body.supersedes,
       id: uuidv4(),
+      // Namespace / site fields
+      collection: body.collection,
+      slug: body.slug,
+      // Rich content
+      contentEnvelope: body.contentEnvelope,
+      // Links
+      links: body.links,
+      // Origin
+      origin: 'local',
+    }
+
+    // Security checks
+    const sec = await checkIngestSecurity(chunk, state)
+    if (!sec.ok) {
+      return reply.status(sec.status).send({ error: sec.error, code: sec.code })
     }
 
     try {
       validateChunk(chunk)
     } catch (err) {
       const e = err as AgentNetError
+      state.reputation.record(chunk.source.peerId, 'INVALID_CONTENT')
       return reply.status(400).send({ error: e.message, code: e.code })
+    }
+
+    // Sign the chunk with the agent identity key
+    let signedChunk = chunk
+    try {
+      signedChunk = await signChunk(chunk, state.agentPrivateKey)
+    } catch (err) {
+      console.warn('[agent-net] Failed to sign chunk:', err)
+      // Continue without signature — graceful degradation
     }
 
     const store = namespace === 'skill' ? session.stores.skill : session.stores.project
     try {
-      await store.put(chunk)
-      return reply.status(201).send(chunk)
+      await store.put(signedChunk)
+      // Update backlink index for new links
+      session.backlinkIndex.indexChunk(signedChunk)
+      return reply.status(201).send(signedChunk)
     } catch (err) {
       const code = err instanceof AgentNetError ? (err as AgentNetError).code : ErrorCode.STORE_WRITE_FAILED
       return reply.status(500).send({ error: String(err), code })
@@ -198,6 +385,105 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       }
     }
     return reply.status(404).send({ error: 'Chunk not found', code: ErrorCode.CHUNK_NOT_FOUND })
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /memory/:id/links — outgoing links from a chunk
+  // ---------------------------------------------------------------------------
+  app.get('/memory/:id/links', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    let chunk: MemoryChunk | null = null
+
+    for (const session of state.sessions.values()) {
+      for (const store of [session.stores.skill, session.stores.project]) {
+        chunk = await store.get(id).catch(() => null)
+        if (chunk) break
+      }
+      if (chunk) break
+    }
+
+    if (!chunk) {
+      return reply.status(404).send({ error: 'Chunk not found', code: ErrorCode.CHUNK_NOT_FOUND })
+    }
+
+    const links = BacklinkIndex.getLinks(chunk)
+    return reply.send({ id, links })
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /memory/:id/backlinks — chunks that link TO this chunk
+  // ---------------------------------------------------------------------------
+  app.get('/memory/:id/backlinks', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const backlinks: MemoryChunk[] = []
+
+    for (const session of state.sessions.values()) {
+      const backlinkIds = session.backlinkIndex.getBacklinks(id)
+      for (const backlinkId of backlinkIds) {
+        for (const store of [session.stores.skill, session.stores.project]) {
+          const chunk = await store.get(backlinkId).catch(() => null)
+          if (chunk) { backlinks.push(chunk); break }
+        }
+      }
+    }
+
+    return reply.send(backlinks)
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /memory/graph — traverse the content graph N hops
+  // ---------------------------------------------------------------------------
+  app.post('/memory/graph', async (req, reply) => {
+    const body = req.body as {
+      startId: string
+      rels?: string[]
+      maxDepth?: number
+    }
+
+    if (!body?.startId) {
+      return reply.status(400).send({ error: 'startId is required', code: ErrorCode.INVALID_CHUNK })
+    }
+
+    const maxDepth = Math.min(body.maxDepth ?? 3, 5)  // Hard cap at 5 hops
+    const relFilter = body.rels ? new Set(body.rels) : null
+
+    // Collect all chunks across sessions for graph lookup
+    const allChunksById = new Map<string, MemoryChunk>()
+    for (const session of state.sessions.values()) {
+      for (const store of [session.stores.skill, session.stores.project]) {
+        const chunks = await store.list().catch(() => [] as MemoryChunk[])
+        for (const c of chunks) allChunksById.set(c.id, c)
+      }
+    }
+
+    // BFS traversal
+    const visited = new Set<string>()
+    const nodes: MemoryChunk[] = []
+    const edges: Array<{ source: string; target: string; rel: string; label?: string }> = []
+    const queue: Array<{ id: string; depth: number }> = [{ id: body.startId, depth: 0 }]
+
+    while (queue.length > 0) {
+      const { id, depth } = queue.shift()!
+      if (visited.has(id)) continue
+      visited.add(id)
+
+      const chunk = allChunksById.get(id)
+      if (!chunk) continue
+      nodes.push(chunk)
+
+      if (depth >= maxDepth) continue
+
+      const links = BacklinkIndex.getLinks(chunk)
+      for (const link of links) {
+        if (relFilter && !relFilter.has(link.rel)) continue
+        if (!isAgentURI(link.target) && !visited.has(link.target)) {
+          edges.push({ source: id, target: link.target, rel: link.rel, label: link.label })
+          queue.push({ id: link.target, depth: depth + 1 })
+        }
+      }
+    }
+
+    return reply.send({ nodes, edges, traversedFrom: body.startId })
   })
 
   // ---------------------------------------------------------------------------
@@ -272,7 +558,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // ---------------------------------------------------------------------------
   app.patch('/memory/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const body = req.body as { content?: string; confidence?: number }
+    const body = req.body as { content?: string; confidence?: number; links?: MemoryChunk['links'] }
 
     let existing: MemoryChunk | null = null
     let foundStore: (typeof state.sessions extends Map<unknown, infer V> ? V : never)['stores']['skill'] | null = null
@@ -295,13 +581,20 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       supersedes: id,
       content: body.content ?? existing.content,
       confidence: body.confidence ?? existing.confidence,
+      links: body.links ?? existing.links,
       source: { ...existing.source, timestamp: Date.now() },
+      origin: 'local',
     }
 
     try {
       validateChunk(updated)
-      await foundStore.put(updated)
-      return reply.send(updated)
+      const signed = await signChunk(updated, state.agentPrivateKey)
+      await foundStore.put(signed)
+      // Update backlink index for new version
+      for (const session of state.sessions.values()) {
+        session.backlinkIndex.indexChunk(signed)
+      }
+      return reply.send(signed)
     } catch (err) {
       const code = err instanceof AgentNetError ? (err as AgentNetError).code : ErrorCode.STORE_WRITE_FAILED
       return reply.status(500).send({ error: String(err), code })
@@ -318,7 +611,11 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     for (const session of state.sessions.values()) {
       for (const s of [session.stores.skill, session.stores.project]) {
         const chunk = await s.get(id).catch(() => null)
-        if (chunk) { await s.forget(id); found = true }
+        if (chunk) {
+          await s.forget(id)
+          session.backlinkIndex.removeChunk(chunk)
+          found = true
+        }
       }
     }
 
@@ -328,7 +625,267 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     return reply.status(204).send()
   })
 
-  // Register protocol handler on startup for any already-active sessions
+  // ===========================================================================
+  // NAMESPACE / SITE ENDPOINTS (TODO-054945bb)
+  // ===========================================================================
+
+  // ---------------------------------------------------------------------------
+  // GET /resolve/:uri — resolve an agent:// URI to a chunk
+  // ---------------------------------------------------------------------------
+  app.get('/resolve/*', async (req, reply) => {
+    const rawUri = (req.params as Record<string, string>)['*']
+    const uri = `agent://${rawUri}`
+
+    let parsed
+    try {
+      parsed = parseAgentURI(uri)
+    } catch (err) {
+      return reply.status(400).send({ error: String(err), code: ErrorCode.URI_PARSE_ERROR })
+    }
+
+    // Try local stores first
+    for (const session of state.sessions.values()) {
+      for (const store of [session.stores.skill, session.stores.project]) {
+        const all = await store.list().catch(() => [] as MemoryChunk[])
+        for (const chunk of all) {
+          if (chunk._tombstone) continue
+          if (chunk.source.peerId !== parsed.peerId) continue
+          if (parsed.collection && chunk.collection !== parsed.collection) continue
+          if (parsed.slug && chunk.slug !== parsed.slug) continue
+          return reply.send(chunk)
+        }
+      }
+    }
+
+    // If we have a collection+slug but no local match, try network query
+    if (parsed.collection && parsed.slug) {
+      const q: MemoryQuery = {
+        peerId: parsed.peerId,
+        collection: parsed.collection,
+      }
+      for (const session of state.sessions.values()) {
+        const peers = session.node.getPeers()
+        for (const peer of peers) {
+          try {
+            const resp = await sendQuery(session.node, peer, q)
+            const match = resp.chunks.find(c =>
+              c.source.peerId === parsed.peerId &&
+              c.collection === parsed.collection &&
+              c.slug === parsed.slug
+            )
+            if (match) return reply.send(match)
+          } catch { /* peer unavailable */ }
+        }
+      }
+    }
+
+    return reply.status(404).send({
+      error: `Could not resolve ${uri}`,
+      code: ErrorCode.RESOLUTION_FAILED,
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /site/:peerId — agent profile + collection listing
+  // ---------------------------------------------------------------------------
+  app.get('/site/:peerId', async (req, reply) => {
+    const { peerId } = req.params as { peerId: string }
+
+    const profile: MemoryChunk | null = await findLocalChunk(state, c =>
+      c.source.peerId === peerId && c.type === 'profile'
+    )
+
+    const collections = new Set<string>()
+    let chunkCount = 0
+
+    for (const session of state.sessions.values()) {
+      for (const store of [session.stores.skill, session.stores.project]) {
+        const all = await store.list().catch(() => [] as MemoryChunk[])
+        for (const chunk of all) {
+          if (chunk._tombstone) continue
+          if (chunk.source.peerId !== peerId) continue
+          chunkCount++
+          if (chunk.collection) collections.add(chunk.collection)
+        }
+      }
+    }
+
+    return reply.send({
+      peerId,
+      profile: profile ?? null,
+      collections: [...collections].sort(),
+      chunkCount,
+      agentUri: buildAgentURI(peerId),
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /site/:peerId/:collection — list chunks in a collection
+  // ---------------------------------------------------------------------------
+  app.get('/site/:peerId/:collection', async (req, reply) => {
+    const { peerId, collection } = req.params as { peerId: string; collection: string }
+    const { limit = '50', since } = req.query as { limit?: string; since?: string }
+
+    const chunks: MemoryChunk[] = []
+    for (const session of state.sessions.values()) {
+      const q: MemoryQuery = {
+        peerId,
+        collection,
+        since: since ? parseInt(since, 10) : undefined,
+        limit: parseInt(limit, 10),
+      }
+      for (const store of [session.stores.skill, session.stores.project]) {
+        const results = await store.query(q).catch(() => [] as MemoryChunk[])
+        chunks.push(...results)
+      }
+    }
+
+    const seen = new Set<string>()
+    const deduped = chunks.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true })
+    const sorted = deduped.sort((a, b) => b.source.timestamp - a.source.timestamp)
+
+    return reply.send({
+      peerId,
+      collection,
+      chunks: sorted,
+      agentUri: buildAgentURI(peerId, collection),
+    })
+  })
+
+  // ===========================================================================
+  // DISCOVERY ENDPOINTS (TODO-a1fcd540)
+  // ===========================================================================
+
+  // ---------------------------------------------------------------------------
+  // GET /discovery/peers — known peers with topic summaries
+  // ---------------------------------------------------------------------------
+  app.get('/discovery/peers', async (_req, reply) => {
+    const peers = []
+    for (const session of state.sessions.values()) {
+      for (const entry of session.discovery.getKnownPeers()) {
+        peers.push({
+          peerId: entry.peerId,
+          displayName: entry.displayName,
+          collections: entry.collections,
+          chunkCount: entry.chunkCount,
+          updatedAt: entry.updatedAt,
+          lastSeen: entry.lastSeen,
+          agentUri: buildAgentURI(entry.peerId),
+        })
+      }
+    }
+    return reply.send(peers)
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /discovery/topics — network-wide topic aggregation
+  // ---------------------------------------------------------------------------
+  app.get('/discovery/topics', async (_req, reply) => {
+    const topicMap = new Map<string, string[]>()
+
+    for (const session of state.sessions.values()) {
+      for (const [peerId] of [[session.node.peerId.toString()]]) {
+        // Local topics
+        for (const store of [session.stores.skill, session.stores.project]) {
+          const chunks = await store.list().catch(() => [] as MemoryChunk[])
+          for (const chunk of chunks) {
+            if (chunk._tombstone) continue
+            for (const t of chunk.topic) {
+              if (!topicMap.has(t)) topicMap.set(t, [])
+              if (!topicMap.get(t)!.includes(peerId)) topicMap.get(t)!.push(peerId)
+            }
+          }
+        }
+      }
+
+      // Remote topics from discovery manifests
+      for (const networkTopic of session.discovery.getNetworkTopics()) {
+        for (const peerIdStr of networkTopic.peers) {
+          if (!topicMap.has(networkTopic.topic)) topicMap.set(networkTopic.topic, [])
+          if (!topicMap.get(networkTopic.topic)!.includes(peerIdStr)) {
+            topicMap.get(networkTopic.topic)!.push(peerIdStr)
+          }
+        }
+      }
+    }
+
+    const topics = [...topicMap.entries()]
+      .map(([topic, peers]) => ({ topic, peerCount: peers.length, peers }))
+      .sort((a, b) => b.peerCount - a.peerCount)
+
+    return reply.send(topics)
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /discovery/topic-check — does a peer probably have topic X?
+  // ---------------------------------------------------------------------------
+  app.get('/discovery/topic-check', async (req, reply) => {
+    const { peerId, topic } = req.query as { peerId?: string; topic?: string }
+    if (!peerId || !topic) {
+      return reply.status(400).send({ error: 'peerId and topic are required', code: ErrorCode.API_ERROR })
+    }
+
+    for (const session of state.sessions.values()) {
+      const result = session.discovery.peerHasTopic(peerId, topic)
+      if (result !== null) {
+        return reply.send({ peerId, topic, probably: result })
+      }
+    }
+
+    return reply.send({ peerId, topic, probably: null, reason: 'peer unknown' })
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /browse/:peerId — browse remote peer's site (active fetch)
+  // ---------------------------------------------------------------------------
+  app.get('/browse/:peerId', async (req, reply) => {
+    const { peerId } = req.params as { peerId: string }
+    const { collection, since, limit = '50' } = req.query as {
+      collection?: string; since?: string; limit?: string
+    }
+
+    for (const session of state.sessions.values()) {
+      try {
+        const result = await session.discovery.browse(
+          peerId,
+          collection,
+          since ? parseInt(since, 10) : undefined,
+          parseInt(limit, 10)
+        )
+        return reply.send(result)
+      } catch (err) {
+        return reply.status(503).send({
+          error: `Could not browse peer ${peerId}: ${String(err)}`,
+          code: ErrorCode.PEER_DIAL_FAILED,
+        })
+      }
+    }
+
+    return reply.status(404).send({ error: 'No active network sessions', code: ErrorCode.NETWORK_NOT_FOUND })
+  })
+
+  // ===========================================================================
+  // SECURITY ENDPOINTS (TODO-ebb16396)
+  // ===========================================================================
+
+  // ---------------------------------------------------------------------------
+  // GET /security/reputation — peer reputation scores
+  // ---------------------------------------------------------------------------
+  app.get('/security/reputation', async (_req, reply) => {
+    return reply.send(state.reputation.getAll())
+  })
+
+  // ---------------------------------------------------------------------------
+  // DELETE /security/reputation/:peerId — clear blacklist for a peer
+  // ---------------------------------------------------------------------------
+  app.delete('/security/reputation/:peerId', async (req, reply) => {
+    const { peerId } = req.params as { peerId: string }
+    state.reputation.clearBlacklist(peerId)
+    state.rateLimiter.reset(peerId)
+    return reply.status(204).send()
+  })
+
+  // Register protocol handlers on startup for any already-active sessions
   app.addHook('onReady', async () => {
     for (const session of state.sessions.values()) {
       registerQueryProtocol(session, state)
@@ -336,6 +893,25 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   })
 
   return app
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function findLocalChunk(
+  state: DaemonState,
+  predicate: (c: MemoryChunk) => boolean
+): Promise<MemoryChunk | null> {
+  for (const session of state.sessions.values()) {
+    for (const store of [session.stores.skill, session.stores.project]) {
+      const all = await store.list().catch(() => [] as MemoryChunk[])
+      for (const c of all) {
+        if (!c._tombstone && predicate(c)) return c
+      }
+    }
+  }
+  return null
 }
 
 /**
@@ -363,6 +939,11 @@ export function registerQueryProtocol(session: NetworkSession, state: DaemonStat
         if (requestChunks.length === 0) return
 
         const req = decodeMessage<{ query: MemoryQuery; requestId: string }>(requestChunks[0])
+
+        // Check if the requesting peer is blacklisted
+        const remotePeers = session.node.getPeers()
+        // (We don't have the remote peerId from the stream directly — skip for now)
+
         const results: MemoryChunk[] = []
         for (const store of [session.stores.skill, session.stores.project]) {
           const chunks = await store.query(req.query).catch(() => [] as MemoryChunk[])

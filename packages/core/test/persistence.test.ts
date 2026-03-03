@@ -26,6 +26,8 @@ import { createOrbitDBContext, createOrbitDBStore, type OrbitDBContext } from '.
 import { createLibp2pNode } from '../src/node.js'
 import { createChunk } from '../src/schema.js'
 import { deriveNetworkId } from '../src/network.js'
+import { keys } from '@libp2p/crypto'
+import { randomBytes } from 'node:crypto'
 
 const TEST_PSK = 'persistence-test-psk-do-not-use-in-prod-32chars!'
 
@@ -36,7 +38,8 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-net-persist-'))
 
     // ── Phase 1: write data ──
-    let node = await createLibp2pNode(networkKeys, { port: 0 })
+    const agentKey = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))
+    let node = await createLibp2pNode(networkKeys, agentKey, { port: 0 })
     let ctx: OrbitDBContext = await createOrbitDBContext(node, tmpDir, networkId)
     let store = await createOrbitDBStore(ctx.orbitdb, networkKeys, 'project')
 
@@ -69,7 +72,8 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
     await node.stop()
 
     // ── Phase 2: reopen with same data directory ──
-    node = await createLibp2pNode(networkKeys, { port: 0 })
+    const agentKey2 = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))
+    node = await createLibp2pNode(networkKeys, agentKey2, { port: 0 })
     ctx = await createOrbitDBContext(node, tmpDir, networkId)
     store = await createOrbitDBStore(ctx.orbitdb, networkKeys, 'project')
 

@@ -28,6 +28,11 @@ export type {
   MemoryNamespace,
   MemoryQuery,
   MemoryChunkInput,
+  ContentFormat,
+  ContentEnvelope,
+  ContentLink,
+  LinkRel,
+  MediaRef,
 } from './schema.js'
 
 // Crypto
@@ -38,6 +43,59 @@ export {
   decryptEnvelope,
 } from './crypto.js'
 export type { NetworkKeys, EncryptedEnvelope } from './crypto.js'
+
+// Agent identity (persistent per-agent Ed25519 keypair)
+export {
+  loadOrCreateIdentity,
+  DEFAULT_IDENTITY_PATH,
+} from './identity.js'
+export type { AgentIdentity } from './identity.js'
+
+// Chunk signing and verification
+export {
+  signChunk,
+  verifyChunkSignature,
+  canonicalChunkBytes,
+} from './signing.js'
+
+// Rate limiting
+export { RateLimiter } from './rate-limiter.js'
+export type { RateLimiterOptions } from './rate-limiter.js'
+
+// Peer reputation scoring
+export { ReputationStore } from './reputation.js'
+export type { ScoreEvent } from './reputation.js'
+
+// agent:// URI scheme
+export {
+  parseAgentURI,
+  buildAgentURI,
+  buildBlobURI,
+  isAgentURI,
+  isBlobURI,
+} from './uri.js'
+export type { AgentURI } from './uri.js'
+
+// Bloom filters
+export { BloomFilter } from './bloom.js'
+
+// Content graph backlink index
+export { BacklinkIndex } from './backlink-index.js'
+
+// Discovery + browse protocol
+export {
+  DiscoveryManager,
+  DISCOVERY_TOPIC,
+  BROWSE_PROTOCOL,
+} from './discovery.js'
+export type {
+  DiscoveryManifest,
+  PeerIndexEntry,
+  BrowseRequest,
+  BrowseResponse,
+  ChunkStub,
+  DiscoveryManagerOptions,
+} from './discovery.js'
 
 // Store interface
 export type { IMemoryStore, MemoryStoreEvents } from './store.js'

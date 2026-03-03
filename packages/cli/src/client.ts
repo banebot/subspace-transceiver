@@ -7,11 +7,21 @@
 
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { readFileSync, existsSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { DaemonError, ErrorCode } from '@agent-net/core'
-import type { MemoryChunk, MemoryQuery, NetworkInfoDTO } from '@agent-net/core'
+import type {
+  MemoryChunk,
+  MemoryQuery,
+  NetworkInfoDTO,
+  ContentLink,
+} from '@agent-net/core'
+import type {
+  ChunkStub,
+  BrowseResponse,
+  PeerIndexEntry,
+} from '@agent-net/core'
 
 const PID_PATH = join(homedir(), '.agent-net', 'daemon.pid')
 
@@ -19,9 +29,6 @@ const PID_PATH = join(homedir(), '.agent-net', 'daemon.pid')
 // Daemon auto-start
 // ---------------------------------------------------------------------------
 
-/**
- * Check if the daemon is reachable. Returns true if healthy.
- */
 async function isDaemonHealthy(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/health`, {
@@ -33,18 +40,8 @@ async function isDaemonHealthy(port: number): Promise<boolean> {
   }
 }
 
-/**
- * Ensure the daemon is running. If not, spawn it and wait up to 10s.
- * Throws DaemonError with DAEMON_TIMEOUT if it doesn't come up.
- */
 export async function ensureDaemon(port: number = 7432): Promise<void> {
   if (await isDaemonHealthy(port)) return
-
-  // Not running — spawn daemon.
-  // Resolution order:
-  //   1. Monorepo / dev: sibling package dist (packages/daemon/dist/index.js)
-  //   2. npm global install: resolve @agent-net/daemon via import.meta.resolve
-  //   3. Compiled binary (bun build --compile): re-spawn self with --_daemon flag
 
   const monoPath = fileURLToPath(new URL('../../daemon/dist/index.js', import.meta.url))
 
@@ -52,23 +49,18 @@ export async function ensureDaemon(port: number = 7432): Promise<void> {
   let spawnArgs: string[]
 
   if (existsSync(monoPath)) {
-    // Case 1: monorepo / local dev
     spawnExec = process.execPath
     spawnArgs = [monoPath, `--port`, String(port)]
   } else {
-    // Case 2: npm installed — try import.meta.resolve (ESM-safe, no require)
     let npmDaemonPath: string | null = null
     try {
       npmDaemonPath = fileURLToPath(import.meta.resolve('@agent-net/daemon'))
-    } catch {
-      // Not available (compiled binary or missing package)
-    }
+    } catch { /* not available */ }
 
     if (npmDaemonPath && existsSync(npmDaemonPath)) {
       spawnExec = process.execPath
       spawnArgs = [npmDaemonPath, `--port`, String(port)]
     } else {
-      // Case 3: compiled binary — spawn self in daemon mode
       spawnExec = process.argv[0]
       spawnArgs = [`--_daemon`, `--port`, String(port)]
     }
@@ -81,17 +73,13 @@ export async function ensureDaemon(port: number = 7432): Promise<void> {
   })
   child.unref()
 
-  // Poll until healthy (up to 10s)
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 500))
     if (await isDaemonHealthy(port)) return
   }
 
-  throw new DaemonError(
-    'Daemon failed to start within 10 seconds.',
-    ErrorCode.DAEMON_TIMEOUT
-  )
+  throw new DaemonError('Daemon failed to start within 10 seconds.', ErrorCode.DAEMON_TIMEOUT)
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +97,6 @@ export class DaemonClient {
 
   private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
     await ensureDaemon(this.port)
-    // Only set Content-Type when there is a request body — Fastify rejects
-    // Content-Type: application/json on bodyless requests (DELETE, etc.).
     const hasBody = !!init?.body
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...init,
@@ -121,12 +107,8 @@ export class DaemonClient {
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText, code: 'API_ERROR' }))
-      throw new DaemonError(
-        body.error ?? `HTTP ${res.status}`,
-        body.code ?? ErrorCode.API_ERROR
-      )
+      throw new DaemonError(body.error ?? `HTTP ${res.status}`, body.code ?? ErrorCode.API_ERROR)
     }
-    // 204 No Content
     if (res.status === 204) return undefined as T
     return res.json() as Promise<T>
   }
@@ -134,13 +116,7 @@ export class DaemonClient {
   // ---------------------------------------------------------------------------
   // Health
   // ---------------------------------------------------------------------------
-  async health(): Promise<{
-    status: string
-    peerId: string
-    networks: NetworkInfoDTO[]
-    uptime: number
-    version: string
-  }> {
+  async health(): Promise<{ status: string; peerId: string; networks: NetworkInfoDTO[]; uptime: number; version: string }> {
     return this.fetch('/health')
   }
 
@@ -152,10 +128,7 @@ export class DaemonClient {
   }
 
   async joinNetwork(psk: string, name?: string): Promise<NetworkInfoDTO> {
-    return this.fetch('/networks', {
-      method: 'POST',
-      body: JSON.stringify({ psk, name }),
-    })
+    return this.fetch('/networks', { method: 'POST', body: JSON.stringify({ psk, name }) })
   }
 
   async leaveNetwork(networkId: string): Promise<void> {
@@ -163,13 +136,10 @@ export class DaemonClient {
   }
 
   // ---------------------------------------------------------------------------
-  // Memory
+  // Memory — CRUD
   // ---------------------------------------------------------------------------
   async putMemory(chunk: Partial<MemoryChunk>): Promise<MemoryChunk> {
-    return this.fetch('/memory', {
-      method: 'POST',
-      body: JSON.stringify(chunk),
-    })
+    return this.fetch('/memory', { method: 'POST', body: JSON.stringify(chunk) })
   }
 
   async getMemory(id: string): Promise<MemoryChunk> {
@@ -177,27 +147,119 @@ export class DaemonClient {
   }
 
   async queryMemory(q: MemoryQuery): Promise<MemoryChunk[]> {
-    return this.fetch('/memory/query', {
-      method: 'POST',
-      body: JSON.stringify(q),
-    })
+    return this.fetch('/memory/query', { method: 'POST', body: JSON.stringify(q) })
   }
 
   async searchMemory(freetext: string, q?: MemoryQuery): Promise<MemoryChunk[]> {
-    return this.fetch('/memory/search', {
-      method: 'POST',
-      body: JSON.stringify({ freetext, ...q }),
-    })
+    return this.fetch('/memory/search', { method: 'POST', body: JSON.stringify({ freetext, ...q }) })
   }
 
-  async updateMemory(id: string, content: string, confidence?: number): Promise<MemoryChunk> {
-    return this.fetch(`/memory/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ content, confidence }),
-    })
+  async updateMemory(id: string, content: string, confidence?: number, links?: ContentLink[]): Promise<MemoryChunk> {
+    return this.fetch(`/memory/${id}`, { method: 'PATCH', body: JSON.stringify({ content, confidence, links }) })
   }
 
   async forgetMemory(id: string): Promise<void> {
     return this.fetch(`/memory/${id}`, { method: 'DELETE' })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Memory — content graph
+  // ---------------------------------------------------------------------------
+  async getLinks(id: string): Promise<{ id: string; links: ContentLink[] }> {
+    return this.fetch(`/memory/${id}/links`)
+  }
+
+  async getBacklinks(id: string): Promise<MemoryChunk[]> {
+    return this.fetch(`/memory/${id}/backlinks`)
+  }
+
+  async traverseGraph(startId: string, rels?: string[], maxDepth?: number): Promise<{
+    nodes: MemoryChunk[]
+    edges: Array<{ source: string; target: string; rel: string; label?: string }>
+    traversedFrom: string
+  }> {
+    return this.fetch('/memory/graph', {
+      method: 'POST',
+      body: JSON.stringify({ startId, rels, maxDepth }),
+    })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Namespaces / site
+  // ---------------------------------------------------------------------------
+  async resolveURI(uri: string): Promise<MemoryChunk> {
+    // Strip 'agent://' prefix — the route uses a wildcard
+    const path = uri.replace(/^agent:\/\//, '')
+    return this.fetch(`/resolve/${path}`)
+  }
+
+  async getSite(peerId: string): Promise<{
+    peerId: string
+    profile: MemoryChunk | null
+    collections: string[]
+    chunkCount: number
+    agentUri: string
+  }> {
+    return this.fetch(`/site/${peerId}`)
+  }
+
+  async getSiteCollection(peerId: string, collection: string, opts?: { limit?: number; since?: number }): Promise<{
+    peerId: string
+    collection: string
+    chunks: MemoryChunk[]
+    agentUri: string
+  }> {
+    const params = new URLSearchParams()
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.since) params.set('since', String(opts.since))
+    const qs = params.toString() ? `?${params}` : ''
+    return this.fetch(`/site/${peerId}/${collection}${qs}`)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Discovery / browse
+  // ---------------------------------------------------------------------------
+  async getDiscoveryPeers(): Promise<Array<{
+    peerId: string
+    displayName?: string
+    collections: string[]
+    chunkCount: number
+    updatedAt: number
+    agentUri: string
+  }>> {
+    return this.fetch('/discovery/peers')
+  }
+
+  async getDiscoveryTopics(): Promise<Array<{
+    topic: string
+    peerCount: number
+    peers: string[]
+  }>> {
+    return this.fetch('/discovery/topics')
+  }
+
+  async checkTopicOnPeer(peerId: string, topic: string): Promise<{ peerId: string; topic: string; probably: boolean | null }> {
+    const params = new URLSearchParams({ peerId, topic })
+    return this.fetch(`/discovery/topic-check?${params}`)
+  }
+
+  async browse(peerId: string, opts?: { collection?: string; since?: number; limit?: number }): Promise<BrowseResponse> {
+    const params = new URLSearchParams()
+    if (opts?.collection) params.set('collection', opts.collection)
+    if (opts?.since) params.set('since', String(opts.since))
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const qs = params.toString() ? `?${params}` : ''
+    return this.fetch(`/browse/${peerId}${qs}`)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Security
+  // ---------------------------------------------------------------------------
+  async getReputation(): Promise<Array<{ peerId: string; score: number; blacklisted: boolean; permanent: boolean }>> {
+    return this.fetch('/security/reputation')
+  }
+
+  async clearPeerBlacklist(peerId: string): Promise<void> {
+    return this.fetch(`/security/reputation/${peerId}`, { method: 'DELETE' })
   }
 }

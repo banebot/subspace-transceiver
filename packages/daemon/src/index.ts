@@ -2,8 +2,8 @@
 /**
  * @agent-net/daemon — entrypoint
  *
- * Parse CLI args, load config, start Fastify API, join known networks,
- * start GC scheduler, handle graceful shutdown.
+ * Parse CLI args, load config, load agent identity, start Fastify API,
+ * join known networks, start GC scheduler, handle graceful shutdown.
  *
  * Flags:
  *   --port <n>       Override configured port
@@ -11,8 +11,22 @@
  */
 
 import { parseArgs } from 'node:util'
-import { joinNetwork, leaveNetwork, type NetworkSession, deriveNetworkId } from '@agent-net/core'
-import { loadConfig, saveConfig, ensureDirectories, type DaemonConfig } from './config.js'
+import {
+  joinNetwork,
+  leaveNetwork,
+  type NetworkSession,
+  deriveNetworkId,
+  loadOrCreateIdentity,
+  RateLimiter,
+  ReputationStore,
+} from '@agent-net/core'
+import {
+  loadConfig,
+  saveConfig,
+  ensureDirectories,
+  IDENTITY_PATH,
+  type DaemonConfig,
+} from './config.js'
 import { writePid, clearPid, isDaemonRunning } from './lifecycle.js'
 import { createApi, registerQueryProtocol, type DaemonState } from './api.js'
 import { startGCScheduler } from './gc-scheduler.js'
@@ -51,15 +65,32 @@ async function main() {
     process.exit(1)
   }
 
+  // ---------------------------------------------------------------------------
+  // Load (or generate) the persistent agent identity
+  // ---------------------------------------------------------------------------
+  let identity: Awaited<ReturnType<typeof loadOrCreateIdentity>>
+  try {
+    identity = await loadOrCreateIdentity(IDENTITY_PATH)
+    console.log(`[agent-net] Agent identity: ${identity.peerId}`)
+  } catch (err) {
+    console.error('[agent-net] Failed to load agent identity:', err)
+    process.exit(1)
+  }
+
   const sessions = new Map<string, NetworkSession>()
 
   // State shared with the API
-  let resolvedPeerId = 'unknown'
   const state: DaemonState = {
     config,
     sessions,
-    getPeerId: () => resolvedPeerId,
+    getPeerId: () => identity.peerId,
     startedAt: Date.now(),
+    agentPrivateKey: identity.privateKey,
+    rateLimiter: new RateLimiter({
+      maxPerWindow: config.security.maxChunksPerPeerPerWindow,
+      windowMs: config.security.rateLimitWindowMs,
+    }),
+    reputation: new ReputationStore(),
   }
 
   // ---------------------------------------------------------------------------
@@ -85,28 +116,28 @@ async function main() {
   // ---------------------------------------------------------------------------
   for (const netConfig of config.networks) {
     try {
-      const session = await joinNetwork(netConfig.psk, {
+      const session = await joinNetwork(netConfig.psk, identity.privateKey, {
         name: netConfig.name,
         dataDir: config.dataDir,
+        displayName: config.displayName,
+        minConnections: config.security.minPeerConnections,
+        trustedBootstrapPeers: config.security.trustedBootstrapPeers,
+        subscribedTopics: config.subscriptions.topics,
+        subscribedPeers: config.subscriptions.peers,
       })
       sessions.set(session.id, session)
       registerQueryProtocol(session, state)
       console.log(
         `[agent-net] Joined network ${session.id.slice(0, 8)}… (${session.node.peerId.toString()})`
       )
-
-      // Use the first session's peer ID as the reported peer ID
-      if (resolvedPeerId === 'unknown') {
-        resolvedPeerId = session.node.peerId.toString()
-      }
     } catch (err) {
       console.warn(`[agent-net] Could not rejoin network ${deriveNetworkId(netConfig.psk).slice(0, 8)}…:`, err)
     }
   }
 
-  // If agentId is null, use peer ID as fallback (config.agentId already warned at load time)
-  if (!config.agentId && resolvedPeerId !== 'unknown') {
-    config.agentId = resolvedPeerId
+  // If agentId is null, use peer ID as fallback
+  if (!config.agentId) {
+    config.agentId = identity.peerId
   }
 
   // ---------------------------------------------------------------------------
@@ -121,11 +152,28 @@ async function main() {
   })
 
   // ---------------------------------------------------------------------------
+  // Peer diversity monitor — warn when below minPeerConnections threshold
+  // ---------------------------------------------------------------------------
+  const diversityHandle = setInterval(() => {
+    const minRequired = config.security.minPeerConnections
+    for (const session of sessions.values()) {
+      const connected = session.node.getPeers().length
+      if (connected < minRequired) {
+        console.warn(
+          `[agent-net] Eclipse risk: only ${connected}/${minRequired} peers connected ` +
+          `(network: ${session.id.slice(0, 8)}…). Check bootstrap/relay configuration.`
+        )
+      }
+    }
+  }, 30_000)
+
+  // ---------------------------------------------------------------------------
   // Graceful shutdown
   // ---------------------------------------------------------------------------
   const shutdown = async (signal: string) => {
     console.log(`\n[agent-net] Received ${signal}, shutting down…`)
     clearInterval(gcHandle)
+    clearInterval(diversityHandle)
 
     // Leave all networks
     for (const session of sessions.values()) {
@@ -136,7 +184,7 @@ async function main() {
     // Stop Fastify
     await app.close().catch(e => console.warn('[agent-net] Fastify close error:', e))
 
-    // Save config (removes networks that failed to rejoin)
+    // Save config
     await saveConfig(config).catch(() => {})
 
     clearPid()

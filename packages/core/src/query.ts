@@ -33,6 +33,12 @@ export function buildOrbitFilter(q: MemoryQuery): (doc: MemoryChunk) => boolean 
     if (q.type !== undefined && doc.type !== q.type) return false
     if (q.namespace !== undefined && doc.namespace !== q.namespace) return false
     if (q.project !== undefined && doc.source.project !== q.project) return false
+    // PeerId namespace filter — matches publishing agent
+    if (q.peerId !== undefined && doc.source.peerId !== q.peerId) return false
+    // Collection filter
+    if (q.collection !== undefined && doc.collection !== q.collection) return false
+    // Content format filter
+    if (q.contentFormat !== undefined && doc.contentEnvelope?.format !== q.contentFormat) return false
     if (q.minConfidence !== undefined && doc.confidence < q.minConfidence) return false
     if (q.since !== undefined && doc.source.timestamp < q.since) return false
     if (q.until !== undefined && doc.source.timestamp > q.until) return false
