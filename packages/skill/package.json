@@ -1,0 +1,6 @@
+{
+  "name": "@agent-net/skill",
+  "version": "0.1.0",
+  "description": "Agent-Net skill documentation for AI agents",
+  "files": ["SKILL.md", "examples/"]
+}

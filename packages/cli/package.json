@@ -1,0 +1,27 @@
+{
+  "name": "@agent-net/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "agent-net": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@agent-net/core": "*",
+    "commander": "14.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.9",
+    "typescript": "5.8.2"
+  }
+}
