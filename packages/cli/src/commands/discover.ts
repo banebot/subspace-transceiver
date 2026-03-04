@@ -193,5 +193,37 @@ export function buildSecurityCommand(): Command {
       }
     })
 
+  // ---------------------------------------------------------------------------
+  // security pow-status — proof-of-work configuration and stamp diagnostics
+  // ---------------------------------------------------------------------------
+  security
+    .command('pow-status')
+    .description('Show proof-of-work configuration, cached stamps, and mining speed benchmark')
+    .option('--json', 'JSON output')
+    .action(async function (this: Command) {
+      const opts = getOpts(this)
+      try {
+        const client = new DaemonClient(opts.port)
+        const status = await client.getPowStatus()
+        if (!opts.json) {
+          const { config: cfg, cachedStamps, benchmark } = status
+          printSuccess('Proof-of-Work status:', opts)
+          print({
+            requirePoW: cfg.requirePoW,
+            powBitsForChunks: cfg.powBitsForChunks,
+            powBitsForRequests: cfg.powBitsForRequests,
+            powWindowMs: `${cfg.powWindowMs / 3_600_000}h`,
+            cachedStamps: cachedStamps.length,
+            benchmarkBits: benchmark.bitsUsed,
+            benchmarkMs: benchmark.mineTimeMs,
+          }, opts)
+        } else {
+          print(status, opts)
+        }
+      } catch (err) {
+        printError(err, opts)
+      }
+    })
+
   return security
 }

@@ -30,6 +30,7 @@ import type { IMemoryStore } from './store.js'
 import { BacklinkIndex } from './backlink-index.js'
 import { DiscoveryManager } from './discovery.js'
 import { NetworkError, ErrorCode } from './errors.js'
+import type { StampCache } from './pow.js'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
@@ -116,6 +117,11 @@ export async function joinNetwork(
     trustedBootstrapPeers?: string[]
     subscribedTopics?: string[]
     subscribedPeers?: string[]
+    // Proof-of-work
+    stampCache?: StampCache
+    powBitsForRequests?: number
+    powWindowMs?: number
+    requirePoW?: boolean
   }
 ): Promise<NetworkSession> {
   validatePSK(psk)
@@ -170,6 +176,11 @@ export async function joinNetwork(
       displayName: options.displayName,
       subscribedTopics: options.subscribedTopics,
       subscribedPeers: options.subscribedPeers,
+      // Proof-of-work
+      stampCache: options.stampCache,
+      powBitsForRequests: options.powBitsForRequests,
+      powWindowMs: options.powWindowMs,
+      requirePoW: options.requirePoW,
     })
 
     // Start discovery after a short delay to let the node connect to some peers

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { v4 as uuidv4 } from 'uuid'
 import { StoreError, ErrorCode } from './errors.js'
+import type { HashcashStamp } from './pow.js'
 
 // ---------------------------------------------------------------------------
 // Memory types and namespaces
@@ -133,13 +134,19 @@ export interface MemoryChunk {
   /** Typed directed links to other chunks or agent:// URIs */
   links?: ContentLink[]
 
-  // ── Security (TODO-ebb16396) ──────────────────────────────────────────────
+  // ── Security (TODO-ebb16396 + TODO-4e34c409) ─────────────────────────────
   /**
    * Ed25519 signature over the canonical chunk bytes (base64-encoded).
    * Canonical = JSON.stringify of the chunk WITHOUT this field, keys sorted.
    * Signed by the agent's identity private key (source.peerId must match signer).
    */
   signature?: string
+
+  /**
+   * Hashcash proof-of-work stamp (optional, backward-compatible).
+   * When security.requirePoW is true, chunks without a valid stamp are rejected.
+   */
+  pow?: HashcashStamp
 
   /** Origin marker for crawled/cached content — not re-advertised to prevent amplification. */
   origin?: 'local' | 'crawl' | 'replicated'
@@ -200,6 +207,13 @@ const contentLinkSchema = z.object({
   label: z.string().optional(),
 })
 
+const hashcashStampSchema = z.object({
+  bits: z.number().int().positive(),
+  challenge: z.string().min(1),
+  nonce: z.string().min(1),
+  hash: z.string().min(1),
+})
+
 export const memoryChunkSchema = z.object({
   id: z.string().uuid('id must be a valid UUID v4'),
   type: memoryTypeSchema,
@@ -229,6 +243,7 @@ export const memoryChunkSchema = z.object({
   links: z.array(contentLinkSchema).optional(),
   // Security
   signature: z.string().optional(),
+  pow: hashcashStampSchema.optional(),
   origin: z.enum(['local', 'crawl', 'replicated']).optional(),
   // Internal
   _tombstone: z.boolean().optional(),

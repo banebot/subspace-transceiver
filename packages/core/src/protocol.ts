@@ -20,6 +20,7 @@ import type { PeerId, Stream } from '@libp2p/interface'
 import type { Source, Sink } from 'it-stream-types'
 import type { MemoryChunk, MemoryQuery } from './schema.js'
 import { NetworkError, ErrorCode } from './errors.js'
+import type { HashcashStamp } from './pow.js'
 
 // Typed duplex interface for it-pipe compatibility
 interface DuplexStream {
@@ -33,6 +34,8 @@ export const QUERY_PROTOCOL = '/agent-net/query/1.0.0'
 export interface QueryRequest {
   query: MemoryQuery
   requestId: string
+  /** Proof-of-work stamp (optional, required when remote enforces requirePoW) */
+  pow?: HashcashStamp
 }
 
 export interface QueryResponse {
@@ -70,14 +73,17 @@ export function decodeMessage<T>(data: Uint8Array | ArrayBufferView): T {
 /**
  * Dial a peer, send a QueryRequest, and read back a QueryResponse.
  * Throws NetworkError with PEER_DIAL_FAILED on timeout (5s) or connection error.
+ *
+ * @param pow - optional proof-of-work stamp to include in the request envelope
  */
 export async function sendQuery(
   node: Libp2p,
   peerId: PeerId,
-  query: MemoryQuery
+  query: MemoryQuery,
+  pow?: HashcashStamp,
 ): Promise<QueryResponse> {
   const requestId = crypto.randomUUID()
-  const request: QueryRequest = { query, requestId }
+  const request: QueryRequest = { query, requestId, ...(pow ? { pow } : {}) }
   const timeoutSignal = AbortSignal.timeout(5000)
 
   let rawStream: Awaited<ReturnType<typeof node.dialProtocol>>

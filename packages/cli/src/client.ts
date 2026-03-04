@@ -262,4 +262,29 @@ export class DaemonClient {
   async clearPeerBlacklist(peerId: string): Promise<void> {
     return this.fetch(`/security/reputation/${peerId}`, { method: 'DELETE' })
   }
+
+  async getPowStatus(): Promise<{
+    peerId: string
+    config: {
+      powBitsForChunks: number
+      powBitsForRequests: number
+      powWindowMs: number
+      requirePoW: boolean
+    }
+    cachedStamps: Array<{
+      scope: string
+      bits: number
+      windowMs: number
+      minedAt: number
+      mineTimeMs: number
+      windowIndex: number
+    }>
+    benchmark: {
+      bitsUsed: number
+      mineTimeMs: number
+      stamp: import('@agent-net/core').HashcashStamp | null
+    }
+  }> {
+    return this.fetch('/security/pow-status')
+  }
 }

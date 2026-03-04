@@ -19,6 +19,7 @@ import {
   loadOrCreateIdentity,
   RateLimiter,
   ReputationStore,
+  StampCache,
 } from '@agent-net/core'
 import {
   loadConfig,
@@ -91,6 +92,7 @@ async function main() {
       windowMs: config.security.rateLimitWindowMs,
     }),
     reputation: new ReputationStore(),
+    stampCache: new StampCache(),
   }
 
   // ---------------------------------------------------------------------------
@@ -124,6 +126,11 @@ async function main() {
         trustedBootstrapPeers: config.security.trustedBootstrapPeers,
         subscribedTopics: config.subscriptions.topics,
         subscribedPeers: config.subscriptions.peers,
+        // Proof-of-work
+        stampCache: state.stampCache,
+        powBitsForRequests: config.security.powBitsForRequests,
+        powWindowMs: config.security.powWindowMs,
+        requirePoW: config.security.requirePoW,
       })
       sessions.set(session.id, session)
       registerQueryProtocol(session, state)

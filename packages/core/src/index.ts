@@ -135,3 +135,19 @@ export { BOOTSTRAP_ADDRESSES, RELAY_ADDRESSES } from './bootstrap.js'
 
 // Node factory (exposed for tests and advanced usage)
 export { createLibp2pNode, derivePeerId } from './node.js'
+
+// Hashcash proof-of-work (TODO-4e34c409)
+export {
+  mineStamp,
+  verifyStamp,
+  currentChallenge,
+  StampCache,
+  DEFAULT_POW_WINDOW_MS,
+  DEFAULT_POW_BITS_CHUNKS,
+  DEFAULT_POW_BITS_REQUESTS,
+} from './pow.js'
+export type {
+  HashcashStamp,
+  PowScope,
+  StampCacheEntry,
+} from './pow.js'

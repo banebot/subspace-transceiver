@@ -37,6 +37,7 @@ import type { PeerId } from '@libp2p/interface'
 import { BloomFilter } from './bloom.js'
 import type { IMemoryStore } from './store.js'
 import { encodeMessage, decodeMessage } from './protocol.js'
+import { type HashcashStamp, type StampCache, verifyStamp } from './pow.js'
 
 // ---------------------------------------------------------------------------
 // Protocol identifiers
@@ -68,6 +69,8 @@ export interface DiscoveryManifest {
   chunkCount: number
   /** Unix ms when this manifest was generated */
   updatedAt: number
+  /** Proof-of-work stamp (optional, required when peers enforce requirePoW) */
+  pow?: HashcashStamp
 }
 
 /**
@@ -138,6 +141,15 @@ export interface DiscoveryManagerOptions {
   subscribedTopics?: string[]
   /** Subscribed peers — trigger active fetch when manifests arrive from these peers */
   subscribedPeers?: string[]
+  // ── Proof-of-work (TODO-4e34c409) ────────────────────────────────────────
+  /** Stamp cache shared with the daemon (optional — manifests skipped if absent) */
+  stampCache?: StampCache
+  /** Bits of difficulty for manifest stamps (default: 16) */
+  powBitsForRequests?: number
+  /** PoW time window in ms (default: 3_600_000) */
+  powWindowMs?: number
+  /** When true, drop incoming manifests that lack a valid PoW stamp */
+  requirePoW?: boolean
 }
 
 export class DiscoveryManager {
@@ -352,6 +364,18 @@ export class DiscoveryManager {
       }
     }
 
+    // Mine a PoW stamp if a stamp cache is configured
+    let pow: HashcashStamp | undefined
+    if (this.opts.stampCache) {
+      const bits = this.opts.powBitsForRequests ?? 16
+      const windowMs = this.opts.powWindowMs ?? 3_600_000
+      try {
+        pow = await this.opts.stampCache.getOrMine(this.opts.localPeerId, 'manifest', bits, windowMs)
+      } catch (err) {
+        console.warn('[agent-net] Discovery: failed to mine manifest stamp:', err)
+      }
+    }
+
     return {
       peerId: this.opts.localPeerId,
       displayName: this.opts.displayName,
@@ -360,6 +384,7 @@ export class DiscoveryManager {
       contentBloom: contentBloom.toBase64(),
       chunkCount,
       updatedAt: Date.now(),
+      ...(pow ? { pow } : {}),
     }
   }
 
@@ -372,6 +397,28 @@ export class DiscoveryManager {
     try {
       const manifest = decodeMessage<DiscoveryManifest>(event.detail.data)
       if (!manifest.peerId || manifest.peerId === this.opts.localPeerId) return
+
+      // PoW verification on incoming manifests
+      if (this.opts.requirePoW || manifest.pow) {
+        const bits = this.opts.powBitsForRequests ?? 16
+        const windowMs = this.opts.powWindowMs ?? 3_600_000
+
+        if (!manifest.pow) {
+          if (this.opts.requirePoW) {
+            console.warn(`[agent-net] Discovery: dropped manifest from ${manifest.peerId} — missing PoW stamp`)
+            return
+          }
+          // No stamp but not required — log warning and allow
+          console.warn(`[agent-net] Discovery: manifest from ${manifest.peerId} has no PoW stamp (requirePoW=false, allowing)`)
+        } else {
+          const valid = verifyStamp(manifest.pow, manifest.peerId, 'manifest', bits, windowMs)
+          if (!valid) {
+            console.warn(`[agent-net] Discovery: dropped manifest from ${manifest.peerId} — invalid PoW stamp`)
+            return
+          }
+        }
+      }
+
       this.updatePeerIndex(manifest)
     } catch { /* malformed manifest — ignore */ }
   }

@@ -62,6 +62,10 @@ import {
   BacklinkIndex,
   // Discovery
   type ChunkStub,
+  // Proof-of-work
+  StampCache,
+  mineStamp,
+  verifyStamp,
 } from '@agent-net/core'
 import type { PrivateKey } from '@libp2p/interface'
 import { pipe } from 'it-pipe'
@@ -80,6 +84,8 @@ export interface DaemonState {
   rateLimiter: RateLimiter
   /** Shared reputation store (across all sessions) */
   reputation: ReputationStore
+  /** Proof-of-work stamp cache — avoids re-mining every request */
+  stampCache: StampCache
 }
 
 // Typed duplex for protocol handler
@@ -185,6 +191,38 @@ async function checkIngestSecurity(
     }
   }
 
+  // 5. Proof-of-work verification (when stamp present, or requirePoW is true)
+  if (chunk.pow && peerId) {
+    const valid = verifyStamp(
+      chunk.pow,
+      peerId,
+      'chunk',
+      security.powBitsForChunks,
+      security.powWindowMs,
+    )
+    if (!valid) {
+      state.reputation.record(peerId, 'SIGNATURE_FAILURE')
+      return {
+        ok: false,
+        status: 400,
+        error: `Proof-of-work stamp invalid for chunk from peer ${peerId}`,
+        code: ErrorCode.PROOF_OF_WORK_INVALID,
+      }
+    }
+  } else if (!chunk.pow && security.requirePoW) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Chunk rejected — security.requirePoW is enabled and no PoW stamp provided',
+      code: ErrorCode.PROOF_OF_WORK_INVALID,
+    }
+  } else if (!chunk.pow) {
+    // No stamp and not required — warn but allow (backward compat)
+    if (peerId) {
+      console.warn(`[agent-net] Chunk from peer ${peerId} has no PoW stamp (requirePoW=false, allowing)`)
+    }
+  }
+
   // All checks passed — record valid ingest
   if (peerId) {
     state.rateLimiter.record(peerId)
@@ -251,6 +289,11 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
         trustedBootstrapPeers: state.config.security.trustedBootstrapPeers,
         subscribedTopics: state.config.subscriptions.topics,
         subscribedPeers: state.config.subscriptions.peers,
+        // Proof-of-work
+        stampCache: state.stampCache,
+        powBitsForRequests: state.config.security.powBitsForRequests,
+        powWindowMs: state.config.security.powWindowMs,
+        requirePoW: state.config.security.requirePoW,
       })
       state.sessions.set(session.id, session)
       const existing = state.config.networks.find(n => deriveNetworkId(n.psk) === networkId)
@@ -352,10 +395,21 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       return reply.status(400).send({ error: e.message, code: e.code })
     }
 
-    // Sign the chunk with the agent identity key
-    let signedChunk = chunk
+    // Mine a proof-of-work stamp (cached per window — only mines once per hour)
+    let powChunk = chunk
     try {
-      signedChunk = await signChunk(chunk, state.agentPrivateKey)
+      const { powBitsForChunks, powWindowMs } = state.config.security
+      const pow = await state.stampCache.getOrMine(localPeerId, 'chunk', powBitsForChunks, powWindowMs)
+      powChunk = { ...chunk, pow }
+    } catch (err) {
+      console.warn('[agent-net] Failed to mine PoW stamp for chunk:', err)
+      // Continue without stamp — graceful degradation
+    }
+
+    // Sign the chunk with the agent identity key
+    let signedChunk = powChunk
+    try {
+      signedChunk = await signChunk(powChunk, state.agentPrivateKey)
     } catch (err) {
       console.warn('[agent-net] Failed to sign chunk:', err)
       // Continue without signature — graceful degradation
@@ -535,9 +589,17 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     const queryOp: MemoryQuery = { ...body }
     delete (queryOp as Record<string, unknown>).freetext
 
+    // Mine a query stamp (16 bits, cheap — cached per window)
+    let queryPow: import('@agent-net/core').HashcashStamp | undefined
+    try {
+      const localPeerIdForQuery = state.getPeerId()
+      const { powBitsForRequests, powWindowMs } = state.config.security
+      queryPow = await state.stampCache.getOrMine(localPeerIdForQuery, 'query', powBitsForRequests, powWindowMs)
+    } catch { /* skip stamp on error */ }
+
     for (const session of state.sessions.values()) {
       const responses = await Promise.allSettled(
-        session.node.getPeers().map((peerId) => sendQuery(session.node, peerId, queryOp))
+        session.node.getPeers().map((peerId) => sendQuery(session.node, peerId, queryOp, queryPow))
       )
       for (const r of responses) {
         if (r.status === 'fulfilled') {
@@ -883,6 +945,40 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     state.reputation.clearBlacklist(peerId)
     state.rateLimiter.reset(peerId)
     return reply.status(204).send()
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /security/pow-status — proof-of-work configuration and cached stamp info
+  // ---------------------------------------------------------------------------
+  app.get('/security/pow-status', async (_req, reply) => {
+    const { powBitsForChunks, powBitsForRequests, powWindowMs, requirePoW } = state.config.security
+    const localPeerId = state.getPeerId()
+
+    // Benchmark: mine a fresh 16-bit stamp (cheap) to report current mining speed
+    const benchStart = Date.now()
+    let benchStamp: import('@agent-net/core').HashcashStamp | null = null
+    try {
+      benchStamp = await mineStamp(localPeerId, 'bench', powBitsForRequests, powWindowMs)
+    } catch { /* ignore */ }
+    const benchMs = Date.now() - benchStart
+
+    return reply.send({
+      peerId: localPeerId,
+      config: { powBitsForChunks, powBitsForRequests, powWindowMs, requirePoW },
+      cachedStamps: state.stampCache.getAll().map(e => ({
+        scope: e.stamp.challenge.slice(0, 8) + '…',  // partial challenge for privacy
+        bits: e.bits,
+        windowMs: e.windowMs,
+        minedAt: e.minedAt,
+        mineTimeMs: e.mineTimeMs,
+        windowIndex: e.windowIndex,
+      })),
+      benchmark: {
+        bitsUsed: powBitsForRequests,
+        mineTimeMs: benchMs,
+        stamp: benchStamp,
+      },
+    })
   })
 
   // Register protocol handlers on startup for any already-active sessions

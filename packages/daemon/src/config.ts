@@ -82,6 +82,29 @@ export interface SecurityConfig {
    * Set to true for high-security deployments.
    */
   requireSignatures: boolean
+
+  // ── Proof-of-work (TODO-4e34c409) ────────────────────────────────────────
+  /**
+   * Leading-zero bits required on chunk PoW stamps.
+   * Default: 20 (~30ms to mine, prevents bulk content flooding).
+   */
+  powBitsForChunks: number
+  /**
+   * Leading-zero bits required on query/browse/manifest PoW stamps.
+   * Default: 16 (~2ms to mine).
+   */
+  powBitsForRequests: number
+  /**
+   * Time window for PoW challenges (ms). Stamps are valid for current + previous window.
+   * Default: 3_600_000 (1 hour).
+   */
+  powWindowMs: number
+  /**
+   * If true, reject chunks/requests without a valid PoW stamp.
+   * Default: false (backward compatible — verifies if present, warns if absent).
+   * Set to true once all agents in the network have been updated.
+   */
+  requirePoW: boolean
 }
 
 export interface SubscriptionConfig {
@@ -114,6 +137,11 @@ export const DEFAULT_SECURITY: SecurityConfig = {
   minPeerConnections: 5,
   trustedBootstrapPeers: [],
   requireSignatures: false,
+  // PoW defaults
+  powBitsForChunks: 20,
+  powBitsForRequests: 16,
+  powWindowMs: 3_600_000,
+  requirePoW: false,
 }
 
 const DEFAULTS: DaemonConfig = {
