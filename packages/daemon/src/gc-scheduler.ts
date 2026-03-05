@@ -1,29 +1,40 @@
 /**
- * Periodic TTL garbage collection scheduler for the Subspace Transceiver daemon.
+ * Periodic TTL garbage collection and epoch rotation scheduler.
  *
- * Runs runGC() on all active stores at a configurable interval (default: 1 hour).
+ * Each interval tick:
+ * 1. Runs TTL GC (tombstones expired chunks within the current epoch)
+ * 2. Checks if any EpochManager needs to rotate to a new epoch
+ * 3. Drops expired epochs (physically deletes LevelDB directories)
+ *
+ * The GC interval (default: 1 hour) handles both TTL enforcement and
+ * epoch lifecycle checks. Epoch rotation itself is rare (weekly by default)
+ * but the check is cheap (just a computeEpochId comparison).
+ *
  * Also runs immediately on startup to prune stale chunks from previous sessions (AC 17).
  */
 
-import { runGC } from '@subspace/core'
-import type { IMemoryStore } from '@subspace/core'
+import { runGC, type IMemoryStore } from '@subspace/core'
+import type { EpochManager } from '@subspace/core'
 
 /**
- * Start the GC scheduler.
+ * Start the GC + epoch rotation scheduler.
  * Runs once immediately, then on each interval tick.
  *
- * @param stores     Active stores to GC (can be updated externally — pass a live reference)
- * @param intervalMs GC interval in milliseconds (default: 3_600_000 = 1 hour)
- * @returns          Interval handle — call clearInterval() on daemon shutdown
+ * @param getStores       Returns the active IMemoryStore list (live reference)
+ * @param getEpochManagers Returns the active EpochManager list for epoch lifecycle
+ * @param intervalMs      GC interval in milliseconds (default: 3_600_000 = 1 hour)
+ * @returns               Interval handle — call clearInterval() on daemon shutdown
  */
 export function startGCScheduler(
   getStores: () => IMemoryStore[],
+  getEpochManagers: () => EpochManager[],
   intervalMs: number = 3_600_000
 ): ReturnType<typeof setInterval> {
   const runAll = async () => {
+    const now = Date.now()
     const stores = getStores()
-    if (stores.length === 0) return
 
+    // ── 1. TTL GC (tombstone expired chunks within current epochs) ──────────
     let totalPruned = 0
     for (const store of stores) {
       try {
@@ -35,7 +46,35 @@ export function startGCScheduler(
     }
 
     if (totalPruned > 0) {
-      console.log(`[subspace] GC: pruned ${totalPruned} expired chunk(s) at ${new Date().toISOString()}`)
+      console.log(`[subspace] GC: pruned ${totalPruned} expired chunk(s) at ${new Date(now).toISOString()}`)
+    }
+
+    // ── 2. Epoch rotation check ──────────────────────────────────────────────
+    const epochManagers = getEpochManagers()
+    let totalRotated = 0
+    let totalDropped = 0
+    let totalReclaimedBytes = 0
+
+    for (const mgr of epochManagers) {
+      try {
+        const rotated = await mgr.maybeRotateEpoch(now)
+        if (rotated) {
+          totalRotated++
+          // ── 3. Drop expired epochs (reclaim disk) ──────────────────────────
+          const { dropped, reclaimedBytes } = await mgr.dropExpiredEpochs(now)
+          totalDropped += dropped.length
+          totalReclaimedBytes += reclaimedBytes
+        }
+      } catch (err) {
+        console.warn('[subspace] GC epoch rotation error:', err)
+      }
+    }
+
+    if (totalRotated > 0) {
+      console.log(
+        `[subspace] GC: rotated ${totalRotated} epoch(s), dropped ${totalDropped}, ` +
+        `reclaimed ${(totalReclaimedBytes / 1024 / 1024).toFixed(1)} MB at ${new Date(now).toISOString()}`
+      )
     }
   }
 

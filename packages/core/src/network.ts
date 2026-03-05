@@ -25,7 +25,8 @@ import type { Helia } from 'helia'
 import type { PrivateKey } from '@libp2p/interface'
 import { deriveNetworkKeys, validatePSK, type NetworkKeys } from './crypto.js'
 import { createLibp2pNode, derivePeerId } from './node.js'
-import { createOrbitDBContext, createOrbitDBStore, type OrbitDBContext } from './orbitdb-store.js'
+import { createOrbitDBContext, type OrbitDBContext } from './orbitdb-store.js'
+import { EpochManager, DEFAULT_EPOCH_CONFIG, type EpochConfig } from './epoch-manager.js'
 import type { IMemoryStore } from './store.js'
 import { BacklinkIndex } from './backlink-index.js'
 import { DiscoveryManager } from './discovery.js'
@@ -53,10 +54,15 @@ export interface NetworkSession {
   helia: Helia
   /** Shared OrbitDB instance */
   orbitdb: OrbitDB
-  /** Memory stores, keyed by namespace */
+  /** Memory stores, keyed by namespace (backed by EpochManager for disk reclamation) */
   stores: {
     skill: IMemoryStore
     project: IMemoryStore
+  }
+  /** Epoch managers (same objects as stores, cast — for epoch lifecycle operations) */
+  epochManagers: {
+    skill: EpochManager
+    project: EpochManager
   }
   /** In-memory backlink index for content graph traversal */
   backlinkIndex: BacklinkIndex
@@ -122,6 +128,8 @@ export async function joinNetwork(
     powBitsForRequests?: number
     powWindowMs?: number
     requirePoW?: boolean
+    // Epoch-based database rotation
+    epochConfig?: EpochConfig
   }
 ): Promise<NetworkSession> {
   validatePSK(psk)
@@ -145,16 +153,17 @@ export async function joinNetwork(
     // Pass networkId so OrbitDB always uses the same signing identity across restarts.
     ctx = await createOrbitDBContext(node, networkDataDir, networkId)
 
-    const [skillStore, projectStore] = await Promise.all([
-      createOrbitDBStore(ctx.orbitdb, networkKeys, 'skill'),
-      createOrbitDBStore(ctx.orbitdb, networkKeys, 'project'),
+    const epochConfig = options.epochConfig ?? DEFAULT_EPOCH_CONFIG
+    const [skillManager, projectManager] = await Promise.all([
+      EpochManager.create(ctx.orbitdb, networkKeys, 'skill', epochConfig, networkDataDir),
+      EpochManager.create(ctx.orbitdb, networkKeys, 'project', epochConfig, networkDataDir),
     ])
 
     // Build backlink index from existing store contents
     const backlinkIndex = new BacklinkIndex()
     await Promise.all([
-      backlinkIndex.build(skillStore),
-      backlinkIndex.build(projectStore),
+      backlinkIndex.build(skillManager),
+      backlinkIndex.build(projectManager),
     ])
 
     // Wire up backlink index to update on replication events
@@ -167,11 +176,11 @@ export async function joinNetwork(
       }
     }
 
-    skillStore.on('replicated', () => { void updateBacklinks(skillStore) })
-    projectStore.on('replicated', () => { void updateBacklinks(projectStore) })
+    skillManager.on('replicated', () => { void updateBacklinks(skillManager) })
+    projectManager.on('replicated', () => { void updateBacklinks(projectManager) })
 
     // Create and start the discovery manager
-    const discovery = new DiscoveryManager(node, [skillStore, projectStore], {
+    const discovery = new DiscoveryManager(node, [skillManager, projectManager], {
       localPeerId,
       displayName: options.displayName,
       subscribedTopics: options.subscribedTopics,
@@ -192,7 +201,8 @@ export async function joinNetwork(
       node,
       helia: ctx.helia,
       orbitdb: ctx.orbitdb,
-      stores: { skill: skillStore, project: projectStore },
+      stores: { skill: skillManager, project: projectManager },
+      epochManagers: { skill: skillManager, project: projectManager },
       backlinkIndex,
       discovery,
       networkKeys,

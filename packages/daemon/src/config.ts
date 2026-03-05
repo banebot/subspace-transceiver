@@ -114,6 +114,43 @@ export interface SubscriptionConfig {
   peers: string[]
 }
 
+/**
+ * Epoch-based OrbitDB database rotation configuration.
+ * Controls disk-space reclamation via time-windowed CRDT epoch rotation.
+ * See packages/core/src/epoch-manager.ts for full design rationale.
+ */
+export interface EpochConfig {
+  /**
+   * Duration of each epoch in milliseconds.
+   * Default: 604_800_000 (7 days).
+   *
+   * High-churn agents: 86_400_000 (1 day) with retainEpochs: 2
+   * Archival agents: 2_592_000_000 (30 days) with retainEpochs: 3
+   */
+  epochDurationMs: number
+  /**
+   * Number of past epochs to retain as readable after rotation.
+   * Total data visibility = (retainEpochs + 1) × epochDurationMs.
+   * Default: 1 → 2 weeks total (current + 1 prior).
+   *
+   * Peers offline longer than retainEpochs × epochDurationMs will miss
+   * data from dropped epochs. This is the explicit tradeoff for disk reclamation.
+   */
+  retainEpochs: number
+  /**
+   * Time before epoch end to start migrating permanent chunks (milliseconds).
+   * Should be long enough for migration to complete before the epoch boundary.
+   * Default: 3_600_000 (1 hour).
+   */
+  migrationLeadTimeMs: number
+}
+
+export const DEFAULT_EPOCH_CONFIG: EpochConfig = {
+  epochDurationMs: 604_800_000,  // 7 days
+  retainEpochs: 1,
+  migrationLeadTimeMs: 3_600_000, // 1 hour
+}
+
 export interface DaemonConfig {
   port: number
   dataDir: string
@@ -124,6 +161,13 @@ export interface DaemonConfig {
   networks: NetworkConfig[]
   security: SecurityConfig
   subscriptions: SubscriptionConfig
+  /**
+   * Epoch-based database rotation.
+   * When enabled (epochDurationMs > 0), OrbitDB stores are split into time-windowed
+   * epochs. Expired epochs are physically deleted, reclaiming disk space from CRDT
+   * tombstones that would otherwise accumulate forever.
+   */
+  epochs: EpochConfig
 }
 
 export const DEFAULT_SECURITY: SecurityConfig = {
@@ -152,6 +196,7 @@ const DEFAULTS: DaemonConfig = {
   networks: [],
   security: DEFAULT_SECURITY,
   subscriptions: { topics: [], peers: [] },
+  epochs: DEFAULT_EPOCH_CONFIG,
 }
 
 /**
@@ -179,6 +224,7 @@ export async function loadConfig(): Promise<DaemonConfig> {
     networks: fileConfig.networks ?? DEFAULTS.networks,
     security: { ...DEFAULT_SECURITY, ...(fileConfig.security ?? {}) },
     subscriptions: { ...DEFAULTS.subscriptions, ...(fileConfig.subscriptions ?? {}) },
+    epochs: { ...DEFAULT_EPOCH_CONFIG, ...(fileConfig.epochs ?? {}) },
   }
 
   if (!config.agentId) {

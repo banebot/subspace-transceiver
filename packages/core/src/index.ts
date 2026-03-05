@@ -103,6 +103,9 @@ export type { IMemoryStore, MemoryStoreEvents } from './store.js'
 // OrbitDB store factory (implementation hidden — use IMemoryStore interface)
 export { createOrbitDBStore, createOrbitDBContext, type OrbitDBContext } from './orbitdb-store.js'
 
+// OrbitDB access controller (replication-layer chunk validation)
+export { SubspaceAccessController, type SubspaceAccessControllerOptions } from './access-controller.js'
+
 // Network operations
 export {
   joinNetwork,
@@ -117,6 +120,15 @@ export type { NetworkInfoDTO, NetworkSession } from './network.js'
 // GC
 export { runGC } from './gc.js'
 export type { GCResult } from './gc.js'
+
+// Epoch-based database rotation
+export {
+  EpochManager,
+  computeEpochId,
+  epochStartMs,
+  DEFAULT_EPOCH_CONFIG,
+} from './epoch-manager.js'
+export type { EpochConfig, EpochInfo, DropResult } from './epoch-manager.js'
 
 // Query utilities (exposed for daemon scan handler)
 export { buildOrbitFilter, resolveHeads, applyQuery } from './query.js'

@@ -27,8 +27,13 @@
  * - GossipSub pub/sub (used by OrbitDB for CRDT replication + discovery)
  * - mDNS local network discovery
  * - AutoNAT + DCUtR for NAT traversal
- * - PSK private network connection filter
  * - Ping (required by KAD-DHT v16)
+ *
+ * NOTE: @libp2p/pnet (PSK connection filter) has been intentionally removed.
+ * pnet blocks public relay/bootstrap nodes that lack the PSK, preventing
+ * DCUtR hole punching and circuit relay across NATs. Network isolation is
+ * enforced at the application layer via GossipSub topic (PSK-derived) and
+ * AES-256-GCM content encryption. See TODO-be6ef995 for full rationale.
  *
  * CRITICAL SERVICE ORDER: `identify` MUST be listed first in the services object.
  * circuitRelayTransport() depends on the identify protocol being registered
@@ -47,7 +52,6 @@ import { dcutr } from '@libp2p/dcutr'
 import { autoNAT } from '@libp2p/autonat'
 import { identify } from '@libp2p/identify'
 import { bootstrap } from '@libp2p/bootstrap'
-import { preSharedKey } from '@libp2p/pnet'
 import { ping } from '@libp2p/ping'
 import { peerIdFromPrivateKey } from '@libp2p/peer-id'
 import type { PrivateKey } from '@libp2p/interface'
@@ -119,11 +123,6 @@ export async function createLibp2pNode(
       // the bootstrap peer list (always-connected trusted peers).
       maxConnections,
     },
-    connectionProtector: preSharedKey({
-      psk: Buffer.from(
-        `/key/swarm/psk/1.0.0/\n/base16/\n${networkKeys.pskFilter.toString('hex')}`
-      ),
-    }),
     services: {
       // CRITICAL: identify MUST be first — circuitRelayTransport depends on it
       identify: identify(),

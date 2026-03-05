@@ -598,8 +598,23 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     } catch { /* skip stamp on error */ }
 
     for (const session of state.sessions.values()) {
+      // Filter peers using discovery Bloom filters to avoid O(N) broadcast.
+      // If the query specifies topics, only dial peers whose Bloom filter indicates
+      // they may have matching content. Peers without topic info are always included
+      // (conservative: false-positives are fine, false-negatives are not).
+      const queryTopics = queryOp.topics ?? []
+      const allPeers = session.node.getPeers()
+      const targetPeers = queryTopics.length > 0
+        ? allPeers.filter(peerId => {
+            const peerStr = peerId.toString()
+            // peerHasTopic returns false (definitely absent) | true (probably present) | null (unknown)
+            // Include the peer if any topic is possibly present (true or null)
+            return queryTopics.some(t => session.discovery.peerHasTopic(peerStr, t) !== false)
+          })
+        : allPeers
+
       const responses = await Promise.allSettled(
-        session.node.getPeers().map((peerId) => sendQuery(session.node, peerId, queryOp, queryPow))
+        targetPeers.map((peerId) => sendQuery(session.node, peerId, queryOp, queryPow))
       )
       for (const r of responses) {
         if (r.status === 'fulfilled') {

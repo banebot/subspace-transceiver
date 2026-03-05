@@ -18,22 +18,156 @@ import { EventEmitter } from 'node:events'
 import { createOrbitDB, type OrbitDB, type DocumentsDatabase } from '@orbitdb/core'
 import type { Helia } from 'helia'
 import type { Libp2p } from 'libp2p'
-import type { MemoryChunk, MemoryQuery, MemoryNamespace } from './schema.js'
+import type { MemoryChunk, MemoryQuery, MemoryNamespace, ContentEnvelope } from './schema.js'
 import { applyQuery } from './query.js'
 import type { IMemoryStore, MemoryStoreEvents } from './store.js'
 import type { NetworkKeys } from './crypto.js'
+import { encryptEnvelope, decryptEnvelope } from './crypto.js'
+import { SubspaceAccessController } from './access-controller.js'
 import { StoreError, ErrorCode } from './errors.js'
+
+// ---------------------------------------------------------------------------
+// Encrypted document shape
+// ---------------------------------------------------------------------------
+//
+// When a chunk is stored with encryption enabled, the `content` and
+// `contentEnvelope.body` fields are replaced with encrypted equivalents.
+// All metadata fields (id, type, namespace, topic[], source, etc.) remain
+// in plaintext so OrbitDB can index and filter them.
+//
+// Stored document layout:
+//   _encrypted: true                     — marks the doc as using envelope encryption
+//   encryptedContent: string (base64)    — AES-256-GCM ciphertext of `content`
+//   contentIv: string (base64)           — 12-byte IV for encryptedContent
+//   contentTag: string (base64)          — 16-byte GCM auth tag for encryptedContent
+//   encryptedEnvelopeBody?: string       — AES-256-GCM ciphertext of contentEnvelope.body
+//   envelopeBodyIv?: string              — IV for encryptedEnvelopeBody
+//   envelopeBodyTag?: string             — auth tag for encryptedEnvelopeBody
+//
+// On read, decryptDoc() reconstructs the original MemoryChunk transparently.
+// Legacy plaintext docs (no _encrypted flag) are returned as-is.
 
 // Internal document shape stored in OrbitDB (uses _id as OrbitDB's primary key).
 // Index signature required for compatibility with @orbitdb/core's Record<string,unknown> API.
-type OrbitDoc = MemoryChunk & { _id: string; [key: string]: unknown }
+type OrbitDoc = Omit<MemoryChunk, 'content' | 'contentEnvelope'> & {
+  _id: string
+  // Plaintext content (unencrypted stores) or empty string placeholder
+  content: string
+  contentEnvelope?: ContentEnvelope
+  // Encryption fields (present when _encrypted: true)
+  _encrypted?: boolean
+  encryptedContent?: string
+  contentIv?: string
+  contentTag?: string
+  encryptedEnvelopeBody?: string
+  envelopeBodyIv?: string
+  envelopeBodyTag?: string
+  [key: string]: unknown
+}
+
+/**
+ * Encrypt the content fields of a chunk before storing in OrbitDB.
+ * Returns a modified OrbitDoc with `content` and `contentEnvelope.body`
+ * replaced by their encrypted equivalents.
+ */
+function encryptDoc(chunk: MemoryChunk, key: Buffer): OrbitDoc {
+  // Encrypt content
+  const contentEnc = encryptEnvelope(Buffer.from(chunk.content, 'utf8'), key)
+
+  const doc: OrbitDoc = {
+    ...(chunk as unknown as OrbitDoc),
+    _id: chunk.id,
+    _encrypted: true,
+    content: '',                                                         // placeholder — not queryable
+    encryptedContent: contentEnc.ciphertext.toString('base64'),
+    contentIv: contentEnc.iv.toString('base64'),
+    contentTag: contentEnc.tag.toString('base64'),
+  }
+
+  // Encrypt contentEnvelope.body if present
+  if (chunk.contentEnvelope?.body) {
+    const bodyEnc = encryptEnvelope(Buffer.from(chunk.contentEnvelope.body, 'utf8'), key)
+    doc.contentEnvelope = {
+      ...chunk.contentEnvelope,
+      body: '',  // placeholder
+    }
+    doc.encryptedEnvelopeBody = bodyEnc.ciphertext.toString('base64')
+    doc.envelopeBodyIv = bodyEnc.iv.toString('base64')
+    doc.envelopeBodyTag = bodyEnc.tag.toString('base64')
+  }
+
+  return doc
+}
+
+/**
+ * Decrypt an OrbitDoc back to a MemoryChunk.
+ * If the doc is not encrypted (_encrypted !== true), returns it as-is.
+ */
+function decryptDoc(doc: OrbitDoc, key: Buffer): MemoryChunk {
+  if (!doc._encrypted) {
+    // Legacy plaintext document — return without modification
+    return doc as unknown as MemoryChunk
+  }
+
+  let content = ''
+  if (doc.encryptedContent && doc.contentIv && doc.contentTag) {
+    try {
+      content = decryptEnvelope(
+        Buffer.from(doc.encryptedContent, 'base64'),
+        Buffer.from(doc.contentIv, 'base64'),
+        Buffer.from(doc.contentTag, 'base64'),
+        key
+      ).toString('utf8')
+    } catch {
+      // Decryption failed — wrong key or corrupted doc; return empty content
+      // rather than crashing. The chunk will be filtered by query/search.
+      content = ''
+    }
+  }
+
+  const chunk = {
+    ...doc,
+    content,
+  } as unknown as MemoryChunk
+
+  // Decrypt contentEnvelope.body if present
+  if (doc.contentEnvelope && doc.encryptedEnvelopeBody && doc.envelopeBodyIv && doc.envelopeBodyTag) {
+    try {
+      const body = decryptEnvelope(
+        Buffer.from(doc.encryptedEnvelopeBody, 'base64'),
+        Buffer.from(doc.envelopeBodyIv, 'base64'),
+        Buffer.from(doc.envelopeBodyTag, 'base64'),
+        key
+      ).toString('utf8')
+      chunk.contentEnvelope = { ...doc.contentEnvelope, body }
+    } catch {
+      // Keep envelope with empty body on decryption failure
+      chunk.contentEnvelope = { ...doc.contentEnvelope, body: '' }
+    }
+  }
+
+  // Strip internal encryption bookkeeping fields from the returned chunk
+  const chunkAny = chunk as unknown as Record<string, unknown>
+  delete chunkAny._encrypted
+  delete chunkAny.encryptedContent
+  delete chunkAny.contentIv
+  delete chunkAny.contentTag
+  delete chunkAny.encryptedEnvelopeBody
+  delete chunkAny.envelopeBodyIv
+  delete chunkAny.envelopeBodyTag
+
+  return chunk
+}
 
 export class OrbitDBMemoryStore extends EventEmitter implements IMemoryStore {
   private db: DocumentsDatabase
+  /** AES-256-GCM key for encrypting content fields. Null = no encryption (tests/legacy). */
+  private envelopeKey: Buffer | null
 
-  private constructor(db: DocumentsDatabase) {
+  private constructor(db: DocumentsDatabase, envelopeKey: Buffer | null) {
     super()
     this.db = db
+    this.envelopeKey = envelopeKey
 
     // Forward OrbitDB replication events as 'replicated'
     // @ts-ignore — OrbitDB v2 event types may not be fully typed
@@ -46,23 +180,52 @@ export class OrbitDBMemoryStore extends EventEmitter implements IMemoryStore {
    * Create a store backed by an already-initialised OrbitDB instance.
    * Helia and the libp2p node are owned by the caller (NetworkSession);
    * this store only manages the OrbitDB database handle.
+   *
+   * @param envelopeKey When provided, content fields are encrypted at rest using
+   *                    AES-256-GCM. Pass null to disable encryption (test/legacy mode).
    */
   static async create(
     orbitdb: OrbitDB,
     networkKeys: NetworkKeys,
     namespace: MemoryNamespace,
+    envelopeKey: Buffer | null = networkKeys.envelopeKey,
   ): Promise<OrbitDBMemoryStore> {
+    // Register the SubspaceAccessController globally so OrbitDB can look it up
+    // when reopening existing databases that have 'subspace' in their manifest.
+    // @ts-ignore — useAccessController is not in the @orbitdb/core type declarations
+    // but IS exported from src/index.js at runtime.
+    const orbitdbModule = await import('@orbitdb/core') as Record<string, unknown>
+    const useAC = orbitdbModule.useAccessController as ((ac: unknown) => void) | undefined
+    if (useAC) {
+      try {
+        useAC(SubspaceAccessController)
+      } catch {
+        // 'already added' — safe to ignore on subsequent calls
+      }
+    }
+
     // DB name includes topic (derived from PSK) + namespace for network isolation
     const dbName = `subspace/${networkKeys.topic}/${namespace}`
-    const db = await orbitdb.open(dbName, { type: 'documents' }) as DocumentsDatabase
+    const db = await orbitdb.open(dbName, {
+      type: 'documents',
+      // Validate every incoming replicated entry before accepting it.
+      // This prevents malicious peers from injecting garbage into the CRDT oplog.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      AccessController: SubspaceAccessController() as any,
+    }) as DocumentsDatabase
 
-    return new OrbitDBMemoryStore(db)
+    return new OrbitDBMemoryStore(db, envelopeKey)
   }
 
   async put(chunk: MemoryChunk): Promise<void> {
     try {
-      // JSON round-trip removes `undefined` fields — IPLD cannot encode undefined.
-      const doc: OrbitDoc = JSON.parse(JSON.stringify({ ...chunk, _id: chunk.id }))
+      let doc: OrbitDoc
+      if (this.envelopeKey) {
+        doc = JSON.parse(JSON.stringify(encryptDoc(chunk, this.envelopeKey)))
+      } else {
+        // JSON round-trip removes `undefined` fields — IPLD cannot encode undefined.
+        doc = JSON.parse(JSON.stringify({ ...chunk, _id: chunk.id }))
+      }
       await this.db.put(doc)
     } catch (err) {
       throw new StoreError(
@@ -80,6 +243,7 @@ export class OrbitDBMemoryStore extends EventEmitter implements IMemoryStore {
       const doc = results[0] as unknown as OrbitDoc
       // Exclude tombstones from external get()
       if (doc._tombstone) return null
+      if (this.envelopeKey) return decryptDoc(doc, this.envelopeKey)
       return doc as unknown as MemoryChunk
     } catch (err) {
       throw new StoreError(
@@ -94,7 +258,10 @@ export class OrbitDBMemoryStore extends EventEmitter implements IMemoryStore {
     try {
       const all = await this.db.query((_doc: Record<string, unknown>) => true) as unknown as OrbitDoc[]
       // Filter out tombstones before applying the user query
-      const chunks = all.filter(d => !d._tombstone).map(d => d as unknown as MemoryChunk)
+      const key = this.envelopeKey
+      const chunks = all
+        .filter(d => !d._tombstone)
+        .map(d => key ? decryptDoc(d, key) : d as unknown as MemoryChunk)
       return applyQuery(chunks, q)
     } catch (err) {
       throw new StoreError(
@@ -109,7 +276,10 @@ export class OrbitDBMemoryStore extends EventEmitter implements IMemoryStore {
     try {
       const all = await this.db.query((_doc: Record<string, unknown>) => true) as unknown as OrbitDoc[]
       // Filter out tombstones — callers should never see soft-deleted chunks
-      return all.filter(d => !d._tombstone).map(d => d as unknown as MemoryChunk)
+      const key = this.envelopeKey
+      return all
+        .filter(d => !d._tombstone)
+        .map(d => key ? decryptDoc(d, key) : d as unknown as MemoryChunk)
     } catch (err) {
       throw new StoreError(
         `List failed: ${String(err)}`,
@@ -267,11 +437,16 @@ export async function createOrbitDBContext(
 /**
  * Factory function — creates and returns an IMemoryStore backed by OrbitDB v2.
  * Requires a pre-initialised OrbitDB instance (use createOrbitDBContext).
+ *
+ * Content fields (`content` and `contentEnvelope.body`) are encrypted at rest
+ * using AES-256-GCM with `networkKeys.envelopeKey`. Pass `envelopeKey: null`
+ * to disable encryption (test/legacy mode).
  */
 export async function createOrbitDBStore(
   orbitdb: OrbitDB,
   networkKeys: NetworkKeys,
   namespace: MemoryNamespace,
+  envelopeKey: Buffer | null = networkKeys.envelopeKey,
 ): Promise<IMemoryStore> {
-  return OrbitDBMemoryStore.create(orbitdb, networkKeys, namespace)
+  return OrbitDBMemoryStore.create(orbitdb, networkKeys, namespace, envelopeKey)
 }

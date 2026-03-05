@@ -26,7 +26,14 @@ export interface NetworkKeys {
   topic: string
   /** 32 bytes — AES-256-GCM symmetric key for message envelope encryption */
   envelopeKey: Buffer
-  /** 32 bytes — libp2p private network PSK (direct connection filter) */
+  /**
+   * @deprecated pskFilter is no longer used for libp2p private-network filtering.
+   * Kept for backward-compatibility with callers that reference this field.
+   * The pnet connection filter has been removed because it blocks public relay
+   * nodes (DCUtR/circuit-relay cannot connect through relays that lack our PSK).
+   * Network isolation is now enforced via GossipSub topic (derived from PSK) +
+   * AES-256-GCM envelope encryption on content fields.
+   */
   pskFilter: Buffer
   /** 32 bytes — deterministic peer identity seed (stable peer ID across restarts) */
   peerId: Buffer

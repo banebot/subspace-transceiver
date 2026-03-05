@@ -20,6 +20,7 @@ import {
   RateLimiter,
   ReputationStore,
   StampCache,
+  type EpochManager,
 } from '@subspace/core'
 import {
   loadConfig,
@@ -131,6 +132,8 @@ async function main() {
         powBitsForRequests: config.security.powBitsForRequests,
         powWindowMs: config.security.powWindowMs,
         requirePoW: config.security.requirePoW,
+        // Epoch-based database rotation
+        epochConfig: config.epochs,
       })
       sessions.set(session.id, session)
       registerQueryProtocol(session, state)
@@ -148,15 +151,24 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------------
-  // Start GC scheduler
+  // Start GC + epoch rotation scheduler
   // ---------------------------------------------------------------------------
-  const gcHandle = startGCScheduler(() => {
-    const stores: IMemoryStore[] = []
-    for (const session of sessions.values()) {
-      stores.push(session.stores.skill, session.stores.project)
-    }
-    return stores
-  })
+  const gcHandle = startGCScheduler(
+    () => {
+      const stores: IMemoryStore[] = []
+      for (const session of sessions.values()) {
+        stores.push(session.stores.skill, session.stores.project)
+      }
+      return stores
+    },
+    () => {
+      const managers: EpochManager[] = []
+      for (const session of sessions.values()) {
+        managers.push(session.epochManagers.skill, session.epochManagers.project)
+      }
+      return managers
+    },
+  )
 
   // ---------------------------------------------------------------------------
   // Peer diversity monitor — warn when below minPeerConnections threshold
