@@ -1,6 +1,6 @@
-# Agent-Net Demo
+# Subspace Transceiver Demo
 
-Two demos that showcase what agent-net does: **decentralized, persistent memory shared across AI agents over a P2P network** — no central server, no shared database, just a PSK.
+Two demos that showcase what Subspace Transceiver does: **a global agent internet — decentralized, persistent memory shared across AI agents over a P2P network** — no central server, no shared database, just a PSK and the global Subspace relay infrastructure.
 
 ---
 
@@ -60,11 +60,11 @@ npm install && npm run build
 ### asciinema (recommended — shareable + embeddable)
 ```bash
 # Install: brew install asciinema
-asciinema rec agent-net-demo.cast
+asciinema rec subspace-demo.cast
 ./demo/solo-demo.sh
 # Ctrl+D to stop recording
-asciinema play agent-net-demo.cast
-asciinema upload agent-net-demo.cast  # get a shareable URL
+asciinema play subspace-demo.cast
+asciinema upload subspace-demo.cast  # get a shareable URL
 ```
 
 ### QuickTime / Screen capture
@@ -82,16 +82,16 @@ asciinema upload agent-net-demo.cast  # get a shareable URL
 ## What to Say (Talking Points)
 
 **Opening hook:**
-> "Every AI agent you run is stateless. It starts fresh every time. What if agents could actually *remember* — not just within a session, but across machines, models, and teams? And what if that memory was private, encrypted, and peer-to-peer — no cloud required?"
+> "Every AI agent you run is stateless. It starts fresh every time. What if agents could actually *remember* — not just within a session, but across machines, models, and teams? And what if that memory was private, encrypted, and peer-to-peer — no cloud required? What if agents could find and collaborate with *any other agent on the internet*, without a central coordinator?"
 
 **After storing the first memory:**
-> "That chunk is now in a local OrbitDB, pinned to this agent's identity, and broadcast-ready to any other agent sharing the same PSK. Think of the PSK like a shared secret your team generates once."
+> "That chunk is now in a local OrbitDB, pinned to this agent's identity, and broadcast-ready to any other agent sharing the same PSK. Think of the PSK like a shared secret your team generates once — it scopes your agents' private mesh within the global Subspace network."
 
 **During the two-agent demo (when Beta finds Alpha's memory):**
-> "Beta didn't ask Alpha anything. It just queried the shared network. The libp2p stack found Alpha's daemon, asked it directly, and got the memories back. No API server. No shared database. Pure P2P."
+> "Beta didn't ask Alpha anything. It just queried the shared network. The libp2p stack found Alpha's daemon — potentially anywhere on the internet through the Subspace relay layer — asked it directly, and got the memories back. No API server. No shared database. Pure P2P."
 
 **Closing:**
-> "This is a primitive — like `localStorage` for agents — but decentralized. Build your memory layer once; any agent, any model, any machine can participate."
+> "This is the infrastructure layer for a global agent internet. Any model, any machine, any team — share a PSK and your agents form a private mesh within a globally connected network. Build your memory layer once; any agent, anywhere, can participate."
 
 ---
 
@@ -108,6 +108,10 @@ asciinema upload agent-net-demo.cast  # get a shareable URL
        │                         │
        └──── PSK Network ─────────┘
            (libp2p + GossipSub)
+                   │
+                   ▼
+       Global Subspace Relay Network
+       (public bootstrap + relay infra)
 ```
 
-Memory chunks are signed with the agent's identity, encrypted in transit via the PSK-derived keys, and stored in OrbitDB CRDTs that merge automatically when peers reconnect.
+Memory chunks are signed with the agent's identity, encrypted in transit via the PSK-derived keys, and stored in OrbitDB CRDTs that merge automatically when peers reconnect. Agents are globally addressable via their libp2p peer IDs — reachable from anywhere through the Subspace relay layer.

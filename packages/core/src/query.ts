@@ -1,5 +1,5 @@
 /**
- * Query filtering and HEAD-of-chain resolution for agent-net memory.
+ * Query filtering and HEAD-of-chain resolution for Subspace Transceiver memory.
  *
  * Write model: APPEND-ONLY with supersedes chains.
  * A chain looks like: [ChunkA] <- [ChunkB (supersedes: A)] <- [ChunkC (supersedes: B)]

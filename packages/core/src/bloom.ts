@@ -1,5 +1,5 @@
 /**
- * Compact Bloom filter for agent-net discovery.
+ * Compact Bloom filter for Subspace Transceiver discovery.
  *
  * Used to encode which topics or chunk IDs a peer holds, enabling other
  * peers to test membership with zero network round-trips.

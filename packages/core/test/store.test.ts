@@ -54,8 +54,8 @@ describe('OrbitDB replication integration', { timeout: 60_000 }, () => {
     const networkKeys = deriveNetworkKeys(TEST_PSK)
 
     // Create temp data directories
-    tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-net-test-a-'))
-    tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-net-test-b-'))
+    tmpDirA = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-test-a-'))
+    tmpDirB = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-test-b-'))
 
     // Spin up two nodes with distinct agent identity keys on different loopback ports
     const [keyA, keyB] = await Promise.all([

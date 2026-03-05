@@ -5,7 +5,7 @@
  * Agents always use --json for programmatic parsing.
  */
 
-import { AgentNetError } from '@agent-net/core'
+import { AgentNetError } from '@subspace/core'
 
 export interface OutputOptions {
   json: boolean

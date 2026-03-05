@@ -4,7 +4,7 @@
     "rootDir": "./src",
     "outDir": "./dist",
     "paths": {
-      "@agent-net/core": ["../core/src/index.ts"]
+      "@subspace/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src/**/*"],

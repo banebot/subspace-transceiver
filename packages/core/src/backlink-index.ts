@@ -1,5 +1,5 @@
 /**
- * In-memory backlink index for the agent-net content graph.
+ * In-memory backlink index for the subspace content graph.
  *
  * Maintains a reverse index: targetId → Set<sourceChunkId>.
  * This allows "what chunks link TO this chunk?" queries in O(1) without

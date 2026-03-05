@@ -1,5 +1,5 @@
 /**
- * Hashcash-style Proof-of-Work stamps for agent-net.
+ * Hashcash-style Proof-of-Work stamps for Subspace Transceiver.
  *
  * Design:
  * - Stateless time-windowed challenges (no round-trip needed)

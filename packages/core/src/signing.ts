@@ -1,5 +1,5 @@
 /**
- * Ed25519 chunk signing and verification for agent-net.
+ * Ed25519 chunk signing and verification for Subspace Transceiver.
  *
  * Every chunk published to the network SHOULD carry a signature. The
  * signature proves that the holder of the private key corresponding to

@@ -53,7 +53,7 @@ export class OrbitDBMemoryStore extends EventEmitter implements IMemoryStore {
     namespace: MemoryNamespace,
   ): Promise<OrbitDBMemoryStore> {
     // DB name includes topic (derived from PSK) + namespace for network isolation
-    const dbName = `agent-net/${networkKeys.topic}/${namespace}`
+    const dbName = `subspace/${networkKeys.topic}/${namespace}`
     const db = await orbitdb.open(dbName, { type: 'documents' }) as DocumentsDatabase
 
     return new OrbitDBMemoryStore(db)

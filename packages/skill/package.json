@@ -1,7 +1,7 @@
 {
-  "name": "@agent-net/skill",
+  "name": "@subspace/skill",
   "version": "0.1.0",
-  "description": "Agent-Net skill documentation — teaches AI agents how to use the agent-net CLI",
+  "description": "Subspace Transceiver skill documentation — teaches AI agents how to use the subspace CLI",
   "license": "MIT",
   "files": [
     "SKILL.md",

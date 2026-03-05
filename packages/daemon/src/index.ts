@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @agent-net/daemon — entrypoint
+ * @subspace/daemon — entrypoint
  *
  * Parse CLI args, load config, load agent identity, start Fastify API,
  * join known networks, start GC scheduler, handle graceful shutdown.
@@ -20,7 +20,7 @@ import {
   RateLimiter,
   ReputationStore,
   StampCache,
-} from '@agent-net/core'
+} from '@subspace/core'
 import {
   loadConfig,
   saveConfig,
@@ -31,7 +31,7 @@ import {
 import { writePid, clearPid, isDaemonRunning } from './lifecycle.js'
 import { createApi, registerQueryProtocol, type DaemonState } from './api.js'
 import { startGCScheduler } from './gc-scheduler.js'
-import type { IMemoryStore } from '@agent-net/core'
+import type { IMemoryStore } from '@subspace/core'
 
 // ---------------------------------------------------------------------------
 // Parse args
@@ -50,7 +50,7 @@ const { values: args } = parseArgs({
 // ---------------------------------------------------------------------------
 async function main() {
   if (isDaemonRunning()) {
-    console.error('[agent-net] Daemon is already running.')
+    console.error('[subspace] Daemon is already running.')
     process.exit(1)
   }
 
@@ -62,7 +62,7 @@ async function main() {
     }
     await ensureDirectories(config)
   } catch (err) {
-    console.error('[agent-net] Failed to load config:', err)
+    console.error('[subspace] Failed to load config:', err)
     process.exit(1)
   }
 
@@ -72,9 +72,9 @@ async function main() {
   let identity: Awaited<ReturnType<typeof loadOrCreateIdentity>>
   try {
     identity = await loadOrCreateIdentity(IDENTITY_PATH)
-    console.log(`[agent-net] Agent identity: ${identity.peerId}`)
+    console.log(`[subspace] Agent identity: ${identity.peerId}`)
   } catch (err) {
-    console.error('[agent-net] Failed to load agent identity:', err)
+    console.error('[subspace] Failed to load agent identity:', err)
     process.exit(1)
   }
 
@@ -102,9 +102,9 @@ async function main() {
   try {
     app = await createApi(state)
     await app.listen({ port: config.port, host: '127.0.0.1' })
-    console.log(`[agent-net] Daemon listening on 127.0.0.1:${config.port}`)
+    console.log(`[subspace] Daemon listening on 127.0.0.1:${config.port}`)
   } catch (err) {
-    console.error('[agent-net] Failed to start API server:', err)
+    console.error('[subspace] Failed to start API server:', err)
     process.exit(1)
   }
 
@@ -135,10 +135,10 @@ async function main() {
       sessions.set(session.id, session)
       registerQueryProtocol(session, state)
       console.log(
-        `[agent-net] Joined network ${session.id.slice(0, 8)}… (${session.node.peerId.toString()})`
+        `[subspace] Joined network ${session.id.slice(0, 8)}… (${session.node.peerId.toString()})`
       )
     } catch (err) {
-      console.warn(`[agent-net] Could not rejoin network ${deriveNetworkId(netConfig.psk).slice(0, 8)}…:`, err)
+      console.warn(`[subspace] Could not rejoin network ${deriveNetworkId(netConfig.psk).slice(0, 8)}…:`, err)
     }
   }
 
@@ -167,7 +167,7 @@ async function main() {
       const connected = session.node.getPeers().length
       if (connected < minRequired) {
         console.warn(
-          `[agent-net] Eclipse risk: only ${connected}/${minRequired} peers connected ` +
+          `[subspace] Eclipse risk: only ${connected}/${minRequired} peers connected ` +
           `(network: ${session.id.slice(0, 8)}…). Check bootstrap/relay configuration.`
         )
       }
@@ -178,24 +178,24 @@ async function main() {
   // Graceful shutdown
   // ---------------------------------------------------------------------------
   const shutdown = async (signal: string) => {
-    console.log(`\n[agent-net] Received ${signal}, shutting down…`)
+    console.log(`\n[subspace] Received ${signal}, shutting down…`)
     clearInterval(gcHandle)
     clearInterval(diversityHandle)
 
     // Leave all networks
     for (const session of sessions.values()) {
-      await leaveNetwork(session).catch(e => console.warn('[agent-net] Leave error:', e))
+      await leaveNetwork(session).catch(e => console.warn('[subspace] Leave error:', e))
     }
     sessions.clear()
 
     // Stop Fastify
-    await app.close().catch(e => console.warn('[agent-net] Fastify close error:', e))
+    await app.close().catch(e => console.warn('[subspace] Fastify close error:', e))
 
     // Save config
     await saveConfig(config).catch(() => {})
 
     clearPid()
-    console.log('[agent-net] Shutdown complete.')
+    console.log('[subspace] Shutdown complete.')
     process.exit(0)
   }
 
@@ -203,23 +203,23 @@ async function main() {
   process.once('SIGINT', () => shutdown('SIGINT'))
 
   process.on('uncaughtException', async (err) => {
-    console.error('[agent-net] Uncaught exception:', err)
+    console.error('[subspace] Uncaught exception:', err)
     await shutdown('uncaughtException')
     process.exit(1)
   })
 
   process.on('unhandledRejection', async (reason) => {
-    console.error('[agent-net] Unhandled rejection:', reason)
+    console.error('[subspace] Unhandled rejection:', reason)
     await shutdown('unhandledRejection')
     process.exit(1)
   })
 
   if (args.foreground) {
-    console.log('[agent-net] Running in foreground mode (--foreground). Press Ctrl+C to stop.')
+    console.log('[subspace] Running in foreground mode (--foreground). Press Ctrl+C to stop.')
   }
 }
 
 main().catch(err => {
-  console.error('[agent-net] Fatal startup error:', err)
+  console.error('[subspace] Fatal startup error:', err)
   process.exit(1)
 })

@@ -11,7 +11,7 @@ function getOpts(cmd: Command): { json: boolean; port: number } {
 }
 
 export function buildNetworkCommand(): Command {
-  const network = new Command('network').description('Manage agent-net networks')
+  const network = new Command('network').description('Manage Subspace Transceiver networks')
 
   // ---------------------------------------------------------------------------
   // network create

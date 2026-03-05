@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# solo-demo.sh — Full agent-net feature walkthrough (single terminal)
+# solo-demo.sh — Full Subspace Transceiver feature walkthrough (single terminal)
 #
 # Scenario: Agent "alpha" (claude-3-7-sonnet) is working on a TypeScript
 # project called "agentstack". It discovers useful patterns, stores them,
@@ -132,12 +132,12 @@ lpause 3
 
 # ─── SECTION 3: Storing Memories ─────────────────────────────────────────────
 
-export AGENT_NET_AGENT_ID=claude-3-7-sonnet
+export SUBSPACE_AGENT_ID=claude-3-7-sonnet
 
 header "3 / 6  ·  STORING MEMORIES  (agent: claude-3-7-sonnet)"
 
 narrate "Set agent identity — all chunks will carry this in source.agentId."
-echo -e "${YELLOW}  \$${NC} ${WHITE}export AGENT_NET_AGENT_ID=claude-3-7-sonnet${NC}"
+echo -e "${YELLOW}  \$${NC} ${WHITE}export SUBSPACE_AGENT_ID=claude-3-7-sonnet${NC}"
 echo ""
 pause
 
@@ -154,7 +154,7 @@ CONTEXT_JSON=$($CLI memory put \
   --confidence 1.0 \
   --json)
 
-echo -e "${YELLOW}  \$${NC} ${WHITE}agent-net memory put \\${NC}"
+echo -e "${YELLOW}  \$${NC} ${WHITE}subspace memory put \\${NC}"
 echo -e "  ${WHITE}  --type context --namespace project --project agentstack \\${NC}"
 echo -e "  ${WHITE}  --topic auth typescript middleware \\${NC}"
 echo -e "  ${WHITE}  --content \"Working on the auth middleware refactor...\" \\${NC}"
@@ -177,7 +177,7 @@ PATTERN_JSON=$($CLI memory put \
   --confidence 0.95 \
   --json)
 
-echo -e "${YELLOW}  \$${NC} ${WHITE}agent-net memory put \\${NC}"
+echo -e "${YELLOW}  \$${NC} ${WHITE}subspace memory put \\${NC}"
 echo -e "  ${WHITE}  --type pattern --namespace skill \\${NC}"
 echo -e "  ${WHITE}  --topic typescript express async error-handling \\${NC}"
 echo -e "  ${WHITE}  --content \"Express async route handlers don't catch...\" \\${NC}"
@@ -200,7 +200,7 @@ SKILL_JSON=$($CLI memory put \
   --confidence 0.92 \
   --json)
 
-echo -e "${YELLOW}  \$${NC} ${WHITE}agent-net memory put \\${NC}"
+echo -e "${YELLOW}  \$${NC} ${WHITE}subspace memory put \\${NC}"
 echo -e "  ${WHITE}  --type skill --namespace skill \\${NC}"
 echo -e "  ${WHITE}  --topic jwt auth security typescript \\${NC}"
 echo -e "  ${WHITE}  --content \"jsonwebtoken v9+ changed the verify() signature...\" \\${NC}"
@@ -224,7 +224,7 @@ RESULT_JSON=$($CLI memory put \
   --confidence 1.0 \
   --json)
 
-echo -e "${YELLOW}  \$${NC} ${WHITE}agent-net memory put \\${NC}"
+echo -e "${YELLOW}  \$${NC} ${WHITE}subspace memory put \\${NC}"
 echo -e "  ${WHITE}  --type result --namespace project --project agentstack \\${NC}"
 echo -e "  ${WHITE}  --topic auth refactor complete \\${NC}"
 echo -e "  ${WHITE}  --content \"Auth middleware refactor complete...\" \\${NC}"
@@ -283,7 +283,7 @@ narrate "This creates a NEW chunk with supersedes: <old-id>. The old chunk is hi
 pause
 
 if [[ -n "$PATTERN_ID" ]]; then
-  echo -e "${YELLOW}  \$${NC} ${WHITE}agent-net memory update $PATTERN_ID \\${NC}"
+  echo -e "${YELLOW}  \$${NC} ${WHITE}subspace memory update $PATTERN_ID \\${NC}"
   echo -e "  ${WHITE}  --content \"Express v5 finally fixes async error propagation natively...\" \\${NC}"
   echo -e "  ${WHITE}  --confidence 0.98 --json${NC}"
   echo ""
@@ -331,7 +331,7 @@ header "6 / 6  ·  AGENT-FIRST JSON OUTPUT"
 narrate "Every command supports --json for machine-readable structured output."
 narrate "Agents pipe this directly into their reasoning loop:"
 echo ""
-echo -e "  ${DIM}memories=\$(agent-net memory query --topic auth --namespace skill --json)${NC}"
+echo -e "  ${DIM}memories=\$(subspace memory query --topic auth --namespace skill --json)${NC}"
 echo -e "  ${DIM}# feed \$memories into your LLM context window...${NC}"
 echo ""
 pause

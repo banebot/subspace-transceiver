@@ -35,7 +35,7 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
   it('data written before close is readable after reopen', async () => {
     const networkKeys = deriveNetworkKeys(TEST_PSK)
     const networkId = deriveNetworkId(TEST_PSK)
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-net-persist-'))
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-persist-'))
 
     // ── Phase 1: write data ──
     const agentKey = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))

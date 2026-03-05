@@ -1,5 +1,5 @@
 /**
- * agent:// URI scheme for addressing content on the agent-net network.
+ * agent:// URI scheme for addressing content on the subspace network.
  *
  * FORMAT
  * ──────

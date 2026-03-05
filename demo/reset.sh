@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # reset.sh — clean slate between demo runs
-# Stops any running daemons and wipes all persisted agent-net data.
+# Stops any running daemons and wipes all persisted Subspace Transceiver data.
 
 set -euo pipefail
 
@@ -10,12 +10,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${BOLD}agent-net demo reset${NC}"
+echo -e "${BOLD}Subspace Transceiver demo reset${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Kill any running daemon (port 7432 and 7433 for two-agent demo)
 for PORT in 7432 7433; do
-  PID_FILE="$HOME/.agent-net-${PORT}/daemon.pid"
+  PID_FILE="$HOME/.subspace-${PORT}/daemon.pid"
   if [[ -f "$PID_FILE" ]]; then
     PID=$(node -e "try{const e=require('fs').readFileSync('$PID_FILE','utf8');console.log(JSON.parse(e).pid)}catch{}" 2>/dev/null || true)
     if [[ -n "$PID" ]] && kill -0 "$PID" 2>/dev/null; then
@@ -37,7 +37,7 @@ for PORT in 7432 7433; do
 done
 
 # Wipe data directories
-for DIR in "$HOME/.agent-net" "$HOME/.agent-net-7432" "$HOME/.agent-net-7433"; do
+for DIR in "$HOME/.subspace" "$HOME/.subspace-7432" "$HOME/.subspace-7433"; do
   if [[ -d "$DIR" ]]; then
     echo -e "  Removing $DIR ..."
     rm -rf "$DIR"
@@ -45,9 +45,9 @@ for DIR in "$HOME/.agent-net" "$HOME/.agent-net-7432" "$HOME/.agent-net-7433"; d
 done
 
 # Kill any leftover tmux session from the two-agent demo
-if tmux has-session -t agent-net-demo 2>/dev/null; then
-  echo -e "  Killing tmux session 'agent-net-demo'..."
-  tmux kill-session -t agent-net-demo
+if tmux has-session -t subspace-demo 2>/dev/null; then
+  echo -e "  Killing tmux session 'subspace-demo'..."
+  tmux kill-session -t subspace-demo
 fi
 
 echo ""

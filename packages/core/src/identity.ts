@@ -1,5 +1,5 @@
 /**
- * Persistent per-agent Ed25519 identity for agent-net.
+ * Persistent per-agent Ed25519 identity for Subspace Transceiver.
  *
  * DESIGN INTENT
  * ─────────────
@@ -21,7 +21,7 @@
  * STORAGE
  * ───────
  * The 32-byte Ed25519 seed is stored at <identityPath> (default:
- * ~/.agent-net/identity.key) with mode 0o600 (owner-read only).
+ * ~/.subspace/identity.key) with mode 0o600 (owner-read only).
  * The seed is regenerated once on first run and never changed.
  */
 
@@ -35,7 +35,7 @@ import { keys } from '@libp2p/crypto'
 import { peerIdFromPrivateKey } from '@libp2p/peer-id'
 import type { PrivateKey } from '@libp2p/interface'
 
-export const DEFAULT_IDENTITY_PATH = join(homedir(), '.agent-net', 'identity.key')
+export const DEFAULT_IDENTITY_PATH = join(homedir(), '.subspace', 'identity.key')
 
 export interface AgentIdentity {
   /** Ed25519 private key — use for signing chunks and as libp2p node identity */
@@ -50,7 +50,7 @@ export interface AgentIdentity {
  *
  * Idempotent — repeated calls with the same path always return the same identity.
  *
- * @param identityPath  Path to the 32-byte seed file (default: ~/.agent-net/identity.key)
+ * @param identityPath  Path to the 32-byte seed file (default: ~/.subspace/identity.key)
  */
 export async function loadOrCreateIdentity(
   identityPath: string = DEFAULT_IDENTITY_PATH
@@ -64,7 +64,7 @@ export async function loadOrCreateIdentity(
     if (seed.length !== 32) {
       // Corrupted file — regenerate
       console.warn(
-        `[agent-net] Identity file at ${identityPath} is corrupt (${seed.length} bytes, expected 32). Regenerating.`
+        `[subspace] Identity file at ${identityPath} is corrupt (${seed.length} bytes, expected 32). Regenerating.`
       )
       seed = Buffer.from(randomBytes(32))
       await writeFile(identityPath, seed, { mode: 0o600 })
@@ -72,7 +72,7 @@ export async function loadOrCreateIdentity(
   } else {
     seed = Buffer.from(randomBytes(32))
     await writeFile(identityPath, seed, { mode: 0o600 })
-    console.log(`[agent-net] Generated new agent identity. Stored at ${identityPath}`)
+    console.log(`[subspace] Generated new agent identity. Stored at ${identityPath}`)
   }
 
   const privateKey = await keys.generateKeyPairFromSeed('Ed25519', seed)

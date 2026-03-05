@@ -1,5 +1,5 @@
 /**
- * Typed error hierarchy for agent-net.
+ * Typed error hierarchy for Subspace Transceiver.
  * All errors carry a machine-readable ErrorCode for programmatic handling.
  */
 
@@ -37,7 +37,7 @@ export const ErrorCode = {
 export type ErrorCode = typeof ErrorCode[keyof typeof ErrorCode]
 
 /**
- * Base error class for all agent-net errors.
+ * Base error class for all subspace errors.
  * Always includes a typed error code and optional original cause.
  */
 export class AgentNetError extends Error {

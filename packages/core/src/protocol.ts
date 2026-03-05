@@ -1,5 +1,5 @@
 /**
- * /agent-net/query/1.0.0 — custom libp2p protocol for network-wide memory scan.
+ * /subspace/query/1.0.0 — custom libp2p protocol for network-wide memory scan.
  *
  * GossipSub is pub/sub only — no request/response semantics.
  * This custom protocol enables daemon-to-daemon memory queries across peers.
@@ -29,7 +29,7 @@ interface DuplexStream {
   close(): Promise<void>
 }
 
-export const QUERY_PROTOCOL = '/agent-net/query/1.0.0'
+export const QUERY_PROTOCOL = '/subspace/query/1.0.0'
 
 export interface QueryRequest {
   query: MemoryQuery

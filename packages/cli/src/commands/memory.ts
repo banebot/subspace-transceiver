@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { Command } from 'commander'
 import { DaemonClient } from '../client.js'
 import { print, printError, printSuccess } from '../output.js'
-import type { MemoryType, MemoryNamespace, ContentFormat, ContentLink } from '@agent-net/core'
+import type { MemoryType, MemoryNamespace, ContentFormat, ContentLink } from '@subspace/core'
 
 function getOpts(cmd: Command): { json: boolean; port: number } {
   const parent = cmd.parent?.parent ?? cmd.parent ?? cmd
@@ -81,7 +81,7 @@ export function buildMemoryCommand(): Command {
           slug: o.slug,
           links: links.length > 0 ? links : undefined,
           source: {
-            agentId: process.env.AGENT_NET_AGENT_ID ?? 'unknown',
+            agentId: process.env.SUBSPACE_AGENT_ID ?? 'unknown',
             peerId: '',
             project: o.project,
             timestamp: Date.now(),

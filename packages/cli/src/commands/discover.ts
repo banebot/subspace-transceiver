@@ -1,14 +1,14 @@
 /**
- * agent-net discover — network discovery and browsing commands
+ * subspace discover — network discovery and browsing commands
  *
  * Usage:
- *   agent-net discover peers              — list known peers from discovery manifests
- *   agent-net discover topics             — show topics across the network
- *   agent-net discover check <peerId>     — does a peer have content about a topic?
- *   agent-net browse <peerId>             — actively browse a peer's site
- *   agent-net subscribe --topic <t>       — subscribe to auto-fetch for a topic
- *   agent-net security reputation         — show peer reputation scores
- *   agent-net security clear <peerId>     — clear a peer's blacklist
+ *   subspace discover peers              — list known peers from discovery manifests
+ *   subspace discover topics             — show topics across the network
+ *   subspace discover check <peerId>     — does a peer have content about a topic?
+ *   subspace browse <peerId>             — actively browse a peer's site
+ *   subspace subscribe --topic <t>       — subscribe to auto-fetch for a topic
+ *   subspace security reputation         — show peer reputation scores
+ *   subspace security clear <peerId>     — clear a peer's blacklist
  */
 
 import { Command } from 'commander'

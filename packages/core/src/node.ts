@@ -1,5 +1,5 @@
 /**
- * libp2p node factory for agent-net.
+ * libp2p node factory for Subspace Transceiver.
  *
  * KEY CHANGES FROM ORIGINAL
  * ─────────────────────────

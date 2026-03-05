@@ -54,10 +54,10 @@ describe('deriveNetworkKeys', () => {
 describe('encryptEnvelope / decryptEnvelope', () => {
   it('round-trips plaintext correctly', () => {
     const keys = deriveNetworkKeys(TEST_PSK)
-    const plaintext = Buffer.from('hello, agent-net!')
+    const plaintext = Buffer.from('hello, subspace!')
     const envelope = encryptEnvelope(plaintext, keys.envelopeKey)
     const decrypted = decryptEnvelope(envelope.ciphertext, envelope.iv, envelope.tag, keys.envelopeKey)
-    expect(decrypted.toString('utf8')).toBe('hello, agent-net!')
+    expect(decrypted.toString('utf8')).toBe('hello, subspace!')
   })
 
   it('uses a different IV on every call', () => {

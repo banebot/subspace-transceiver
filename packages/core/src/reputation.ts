@@ -1,5 +1,5 @@
 /**
- * Peer reputation scoring for agent-net.
+ * Peer reputation scoring for Subspace Transceiver.
  *
  * Each node maintains a LOCAL reputation score for every peer it interacts with.
  * Scores are NOT shared over the network — they are a private, subjective view
@@ -72,10 +72,10 @@ export class ReputationStore {
     if (!rec.isPermanentlyBlacklisted) {
       if (rec.score < ReputationStore.PERM_BLACKLIST_THRESHOLD) {
         rec.isPermanentlyBlacklisted = true
-        console.warn(`[agent-net] Peer ${peerId} permanently blacklisted (score: ${rec.score.toFixed(1)})`)
+        console.warn(`[subspace] Peer ${peerId} permanently blacklisted (score: ${rec.score.toFixed(1)})`)
       } else if (rec.score < ReputationStore.TEMP_BLACKLIST_THRESHOLD && rec.blacklistedUntil === 0) {
         rec.blacklistedUntil = Date.now() + 60 * 60 * 1000  // 1 hour
-        console.warn(`[agent-net] Peer ${peerId} temp-blacklisted for 1 hour (score: ${rec.score.toFixed(1)})`)
+        console.warn(`[subspace] Peer ${peerId} temp-blacklisted for 1 hour (score: ${rec.score.toFixed(1)})`)
       }
     }
   }

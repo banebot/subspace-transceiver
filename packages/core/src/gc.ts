@@ -1,5 +1,5 @@
 /**
- * TTL garbage collection for agent-net memory stores.
+ * TTL garbage collection for Subspace Transceiver memory stores.
  *
  * runGC() is stateless and idempotent — safe to call repeatedly.
  * It tombstones (not physically deletes) expired chunks so that

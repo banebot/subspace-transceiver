@@ -1,5 +1,5 @@
 /**
- * Fastify HTTP API for the agent-net daemon.
+ * Fastify HTTP API for the Subspace Transceiver daemon.
  *
  * Binds ONLY to 127.0.0.1 — never 0.0.0.0 (AC 10).
  * All error responses: { error: string, code: string }
@@ -66,7 +66,7 @@ import {
   StampCache,
   mineStamp,
   verifyStamp,
-} from '@agent-net/core'
+} from '@subspace/core'
 import type { PrivateKey } from '@libp2p/interface'
 import { pipe } from 'it-pipe'
 import * as lp from 'it-length-prefixed'
@@ -180,7 +180,7 @@ async function checkIngestSecurity(
       }
     } catch (err) {
       // If we can't verify (e.g. non-Ed25519 PeerId), warn and allow
-      console.warn('[agent-net] Could not verify chunk signature:', err)
+      console.warn('[subspace] Could not verify chunk signature:', err)
     }
   } else if (!chunk.signature && security.requireSignatures) {
     return {
@@ -219,7 +219,7 @@ async function checkIngestSecurity(
   } else if (!chunk.pow) {
     // No stamp and not required — warn but allow (backward compat)
     if (peerId) {
-      console.warn(`[agent-net] Chunk from peer ${peerId} has no PoW stamp (requirePoW=false, allowing)`)
+      console.warn(`[subspace] Chunk from peer ${peerId} has no PoW stamp (requirePoW=false, allowing)`)
     }
   }
 
@@ -402,7 +402,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       const pow = await state.stampCache.getOrMine(localPeerId, 'chunk', powBitsForChunks, powWindowMs)
       powChunk = { ...chunk, pow }
     } catch (err) {
-      console.warn('[agent-net] Failed to mine PoW stamp for chunk:', err)
+      console.warn('[subspace] Failed to mine PoW stamp for chunk:', err)
       // Continue without stamp — graceful degradation
     }
 
@@ -411,7 +411,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     try {
       signedChunk = await signChunk(powChunk, state.agentPrivateKey)
     } catch (err) {
-      console.warn('[agent-net] Failed to sign chunk:', err)
+      console.warn('[subspace] Failed to sign chunk:', err)
       // Continue without signature — graceful degradation
     }
 
@@ -590,7 +590,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     delete (queryOp as Record<string, unknown>).freetext
 
     // Mine a query stamp (16 bits, cheap — cached per window)
-    let queryPow: import('@agent-net/core').HashcashStamp | undefined
+    let queryPow: import('@subspace/core').HashcashStamp | undefined
     try {
       const localPeerIdForQuery = state.getPeerId()
       const { powBitsForRequests, powWindowMs } = state.config.security
@@ -956,7 +956,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
 
     // Benchmark: mine a fresh 16-bit stamp (cheap) to report current mining speed
     const benchStart = Date.now()
-    let benchStamp: import('@agent-net/core').HashcashStamp | null = null
+    let benchStamp: import('@subspace/core').HashcashStamp | null = null
     try {
       benchStamp = await mineStamp(localPeerId, 'bench', powBitsForRequests, powWindowMs)
     } catch { /* ignore */ }
@@ -1011,7 +1011,7 @@ async function findLocalChunk(
 }
 
 /**
- * Register the /agent-net/query/1.0.0 libp2p protocol handler.
+ * Register the /subspace/query/1.0.0 libp2p protocol handler.
  * Responds to incoming peer queries from other agents using the local store.
  */
 export function registerQueryProtocol(session: NetworkSession, state: DaemonState): void {
@@ -1050,7 +1050,7 @@ export function registerQueryProtocol(session: NetworkSession, state: DaemonStat
         async function* responseSource() { yield encodeMessage(response) }
         await pipe(responseSource(), (src) => lp.encode(src), s.sink)
       } catch (err) {
-        console.warn('[agent-net] Query protocol handler error:', err)
+        console.warn('[subspace] Query protocol handler error:', err)
       }
     })
   })()

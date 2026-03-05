@@ -1,11 +1,11 @@
 {
-  "name": "@agent-net/cli",
+  "name": "@subspace/cli",
   "version": "0.1.0",
   "type": "module",
   "description": "Decentralized agent memory — store, query, and share memory across AI agents over a P2P network",
   "license": "MIT",
   "bin": {
-    "agent-net": "./dist/index.js"
+    "subspace": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,8 +29,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@agent-net/core": "*",
-    "@agent-net/daemon": "*",
+    "@subspace/core": "*",
+    "@subspace/daemon": "*",
     "commander": "14.0.3"
   },
   "devDependencies": {

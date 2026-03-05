@@ -1,12 +1,12 @@
 /**
- * Periodic TTL garbage collection scheduler for the agent-net daemon.
+ * Periodic TTL garbage collection scheduler for the Subspace Transceiver daemon.
  *
  * Runs runGC() on all active stores at a configurable interval (default: 1 hour).
  * Also runs immediately on startup to prune stale chunks from previous sessions (AC 17).
  */
 
-import { runGC } from '@agent-net/core'
-import type { IMemoryStore } from '@agent-net/core'
+import { runGC } from '@subspace/core'
+import type { IMemoryStore } from '@subspace/core'
 
 /**
  * Start the GC scheduler.
@@ -30,12 +30,12 @@ export function startGCScheduler(
         const { pruned } = await runGC(store)
         totalPruned += pruned
       } catch (err) {
-        console.warn('[agent-net] GC error on store:', err)
+        console.warn('[subspace] GC error on store:', err)
       }
     }
 
     if (totalPruned > 0) {
-      console.log(`[agent-net] GC: pruned ${totalPruned} expired chunk(s) at ${new Date().toISOString()}`)
+      console.log(`[subspace] GC: pruned ${totalPruned} expired chunk(s) at ${new Date().toISOString()}`)
     }
   }
 

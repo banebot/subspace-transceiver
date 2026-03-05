@@ -1,6 +1,6 @@
 ---
-title: 'Agent-Net: Decentralized Agent Memory Layer'
-slug: 'agent-net-memory-layer'
+title: 'Subspace Transceiver: Global Agent Internet'
+slug: 'subspace-memory-layer'
 created: '2026-03-02T19:34:32Z'
 status: 'implementation-complete'
 stepsCompleted: [1, 2, 3, 4, 5]
@@ -52,7 +52,7 @@ code_patterns:
   - 'Typed error classes (AgentNetError base, subclasses per domain)'
   - 'IMemoryStore interface in store.ts — OrbitDB impl hidden behind it'
   - 'All CLI commands accept --json flag for structured output'
-  - 'Daemon API: localhost:7432 (default), configurable in ~/.agent-net/config.yaml'
+  - 'Daemon API: localhost:7432 (default), configurable in ~/.subspace/config.yaml'
   - 'Append-only writes: never put() over existing id, always new id + supersedes field'
   - 'HKDF key derivation centralised in crypto.ts — all callers import from there'
   - 'Bootstrap addresses: hardcoded constants in bootstrap.ts (IPFS + PL relay nodes)'
@@ -64,7 +64,7 @@ test_patterns:
   - 'CLI commands tested via child_process spawn against live daemon'
 ---
 
-# Tech-Spec: Agent-Net: Decentralized Agent Memory Layer
+# Tech-Spec: Subspace Transceiver: Global Agent Internet
 
 **Created:** 2026-03-02T19:34:32Z
 
@@ -74,31 +74,48 @@ test_patterns:
 
 ### Problem Statement
 
-AI agents are stateless by default — every session starts from zero. Agents running across multiple machines, sessions, or networks cannot share what they've learned: codebase patterns, domain knowledge, successful strategies, or project decisions. There is no portable, decentralized, agent-native memory layer that works without central infrastructure. Existing solutions are either centralized (cloud-based vector DBs), require embedding models (not data-portable), or are human-centric (not optimized for agent read/write patterns).
+AI agents are stateless by default — every session starts from zero. Agents running across multiple machines, sessions, or networks cannot share what they've learned: codebase patterns, domain knowledge, successful strategies, or project decisions. There is no portable, decentralized, agent-native memory layer that works without central infrastructure. Existing solutions are either centralized (cloud-based vector DBs), require embedding models (not data-portable), or are human-centric (not optimized for agent read/write patterns). Furthermore, there is no global addressing scheme that lets agents *find* and *link to* each other's knowledge across networks.
 
 ### Solution
 
-Build a decentralized, peer-to-peer agent memory layer using **libp2p + OrbitDB v2** as the core stack. Agents join named **networks** (formed by a pre-shared key), contribute and query **memory chunks** (CRDT documents with semantic tags, provenance, and TTL), and replicate state automatically across all peers in the network. The system bootstraps off free public IPFS infrastructure — no owned servers required. It is packaged as:
+Build a **global agent internet** — a decentralized, peer-to-peer memory and communication layer using **libp2p + OrbitDB v2** as the core stack. Agents join named **networks** (formed by a pre-shared key), contribute and query **memory chunks** (CRDT documents with semantic tags, provenance, and TTL), and replicate state automatically across all peers in the network. Beyond raw memory, agents have:
 
-1. **`@agent-net/daemon`** — long-running Node.js process managing p2p connections and local OrbitDB state
-2. **`@agent-net/cli`** — `agent-net` CLI for agents and users to interact with the daemon
-3. **`@agent-net/skill`** — a BMAD/pi-compatible skill teaching agents how to use the CLI
+- **Global identities** via persistent Ed25519 keypairs — independent of PSK, stable across restarts
+- **Global addressing** via the `agent://` URI scheme — content addressable anywhere on the internet
+- **Global discovery** via Bloom-filter manifests and the `/subspace/browse/1.0.0` browse protocol
+- **Content links** — typed directed edges between chunks forming a hyperlinked knowledge graph
+- **Trust layer** — Ed25519 chunk signing, hashcash PoW, per-peer reputation, and rate limiting
+
+The system bootstraps off free public IPFS infrastructure — no owned servers required. It is packaged as:
+
+1. **`@subspace/daemon`** — long-running Node.js process managing p2p connections and local OrbitDB state
+2. **`@subspace/cli`** — `subspace` CLI for agents and users to interact with the daemon
+3. **`@subspace/skill`** — a BMAD/pi-compatible skill teaching agents how to use the CLI
 
 ### Scope
 
 **In Scope:**
 
 - Monorepo structure (`packages/`) with TypeScript, Bun-compatible build, shared types
-- **`@agent-net/core`**: libp2p node factory, PSK→network key derivation (HKDF), OrbitDB document store abstraction, memory chunk schema + CRDT operations, network join/leave, contribute/query/scan/forget operations, GossipSub topic management, NAT traversal configuration
-- **`@agent-net/daemon`**: long-running daemon process with local HTTP REST API (localhost only) + optional Unix socket, daemon lifecycle management (start/stop/status/restart), config file management, automatic reconnection
-- **`@agent-net/cli`**: `agent-net` CLI (Commander.js) with full command set (see Implementation Plan)
-- **`@agent-net/skill`**: agent-facing skill markdown + example prompts teaching agents how to operate the CLI for memory contribute/query workflows
+- **`@subspace/core`**: libp2p node factory, PSK→network key derivation (HKDF), OrbitDB document store abstraction, memory chunk schema + CRDT operations, network join/leave, contribute/query/scan/forget operations, GossipSub topic management, NAT traversal configuration
+- **`@subspace/daemon`**: long-running daemon process with local HTTP REST API (localhost only) + optional Unix socket, daemon lifecycle management (start/stop/status/restart), config file management, automatic reconnection
+- **`@subspace/cli`**: `subspace` CLI (Commander.js) with full command set (see Implementation Plan)
+- **`@subspace/skill`**: agent-facing skill markdown + example prompts teaching agents how to operate the CLI for memory contribute/query workflows
 - **PSK-based network model**: PSK → HKDF derivation of DHT key, GossipSub topic, and envelope symmetric key; libp2p private network PSK filter as secondary layer for direct connections
-- **Memory types**: `skill`, `project`, `context`, `pattern`, `result`; with fields: `id`, `type`, `topic[]`, `content`, `source` (agentId, machineId/peerId, project, timestamp), `ttl?`, `confidence?`, `network`
+- **Memory types**: `skill`, `project`, `context`, `pattern`, `result`, `document`, `schema`, `thread`, `blob-manifest`, `profile`; with fields: `id`, `type`, `topic[]`, `content`, `source` (agentId, machineId/peerId, project, timestamp), `ttl?`, `confidence?`, `network`
 - **Two namespaces**: project memory (scoped to a repo/project identifier) and skill memory (portable across projects)
 - **NAT traversal via free public infra**: IPFS bootstrap nodes + Protocol Labs public circuit relay nodes + DCUtR (hole punching) + AutoNAT + mDNS (local-first discovery)
 - **Replication**: OrbitDB GossipSub-based automatic CRDT replication across network peers
 - **Query interface**: filter by type, topic tags, source agent, project, time range, confidence threshold; full-text scan mode for agent browsing
+- **Persistent agent identity**: Ed25519 keypair stored at `~/.subspace/identity.key` — independent of PSK, stable across restarts, used for signing and as libp2p PeerId
+- **Ed25519 chunk signing**: every chunk signed by the publishing agent's private key; `source.peerId` is the public key — verifiable without a CA
+- **`agent://` URI scheme**: globally addressable content at `agent://<peerId>[/<collection>[/<slug>]]`; blob variant `agent://<peerId>/blobs/<sha256>`
+- **Content envelopes**: rich content types (markdown, code, JSON, tables, conversation threads) alongside plain-text search summaries
+- **Content links**: typed directed edges between chunks (`related`, `depends-on`, `supersedes`, `references`, `part-of`, `reply-to`, `see-also`) forming a hyperlinked knowledge graph
+- **Backlink index**: in-memory reverse link index (target → sources) rebuilt on daemon startup; O(1) "what links to this chunk?" queries
+- **Collections and slugs**: `collection` (named grouping) + `slug` (human-readable identifier) fields on chunks; enables `agent://<peerId>/<collection>/<slug>` addressing
+- **Discovery layer**: passive Bloom-filter manifests (GossipSub, 60s interval) + active `/subspace/browse/1.0.0` browse protocol for paginated peer content listing; topic/peer subscriptions trigger auto-fetch
+- **Trust and abuse resistance**: hashcash PoW stamps (`chunk`: 20 bits, `query`/`manifest`: 16 bits), per-peer reputation scoring with decay and blacklisting, sliding-window rate limiter
 
 **Out of Scope:**
 
@@ -107,9 +124,10 @@ Build a decentralized, peer-to-peer agent memory layer using **libp2p + OrbitDB 
 - Owned/paid relay infrastructure
 - GUI / web dashboard
 - Cross-network federation or bridging
-- Authentication schemes beyond PSK
+- Authentication schemes beyond PSK + Ed25519
 - Mobile clients
 - Memory encryption at rest (beyond envelope-level network encryption)
+- P2P binary blob transfer protocol (deferred — `agent://blobs/` URIs reference blobs by hash, transfer protocol TBD)
 
 ---
 
@@ -119,16 +137,16 @@ Build a decentralized, peer-to-peer agent memory layer using **libp2p + OrbitDB 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                          agent-net monorepo                      │
+│                          subspace-transceiver monorepo                      │
 │                                                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ @agent-net/  │  │ @agent-net/  │  │   @agent-net/skill   │  │
+│  │ @subspace/  │  │ @subspace/  │  │   @subspace/skill   │  │
 │  │    core      │  │    daemon    │  │  (skill markdown +   │  │
 │  │              │  │              │  │   prompt templates)  │  │
 │  │ • libp2p     │  │ • HTTP API   │  └──────────────────────┘  │
 │  │ • OrbitDB    │  │ • Unix socket│                             │
 │  │ • HKDF/PSK   │  │ • Lifecycle  │  ┌──────────────────────┐  │
-│  │ • CRDT ops   │  │              │  │   @agent-net/cli     │  │
+│  │ • CRDT ops   │  │              │  │   @subspace/cli     │  │
 │  └──────┬───────┘  └──────┬───────┘  │  (Commander.js)      │  │
 │         │                 │           │  → daemon start/stop  │  │
 │         └────────────┬────┘           │  → network create/    │  │
@@ -163,77 +181,163 @@ Build a decentralized, peer-to-peer agent memory layer using **libp2p + OrbitDB 
 PSK (string/bytes)
     │
     ▼  HKDF-SHA256
-    ├── info: "agent-net/dht-key"     → DHT announcement key (peers publish presence here)
-    ├── info: "agent-net/topic"       → GossipSub topic name (OrbitDB replication channel)
-    ├── info: "agent-net/envelope"    → AES-256-GCM symmetric key (all message payloads)
-    ├── info: "agent-net/psk-filter"  → libp2p private network PSK (direct conn filter)
-    └── info: "agent-net/peer-id"     → deterministic peer identity seed (stable across restarts)
+    ├── info: "subspace/dht-key"     → DHT announcement key (peers publish presence here)
+    ├── info: "subspace/topic"       → GossipSub topic name (OrbitDB replication channel)
+    ├── info: "subspace/envelope"    → AES-256-GCM symmetric key (all message payloads)
+    ├── info: "subspace/psk-filter"  → libp2p private network PSK (direct conn filter)
+    └── info: "subspace/peer-id"     → deterministic peer identity seed (stable across restarts)
 ```
 
 ### Memory Chunk Schema
 
+The `MemoryChunk` type has been extended to support the full global-agent-internet feature set. Core fields are backward-compatible; all new fields are optional.
+
 ```typescript
 interface MemoryChunk {
+  // ── Core fields (original) ───────────────────────────────────────────────
   id: string;                    // UUID v4 (stable across updates)
-  type: MemoryType;              // 'skill' | 'project' | 'context' | 'pattern' | 'result'
+  type: MemoryType;              // see MemoryType below
   namespace: MemoryNamespace;    // 'skill' | 'project'
-  topic: string[];               // semantic tags e.g. ['typescript', 'error-handling', 'async']
-  content: string;               // the memory content (free text or JSON string)
+  topic: string[];               // semantic tags e.g. ['typescript', 'error-handling']
+  content: string;               // plain-text summary — always required, used for search
   source: {
     agentId: string;             // agent identifier (e.g. 'claude-3-7-sonnet')
-    peerId: string;              // libp2p peer ID of contributing machine
-    project?: string;            // project slug (for project-namespace chunks)
-    sessionId?: string;          // optional session identifier
+    peerId: string;              // Ed25519 libp2p PeerId of contributing agent
+    project?: string;
+    sessionId?: string;
     timestamp: number;           // Unix ms
   };
   ttl?: number;                  // Unix ms expiry (undefined = permanent)
-  confidence: number;            // 0.0–1.0 (agent's confidence in this memory)
-  network: string;               // network ID (SHA256 of PSK, for reference only)
-  version: number;               // incremented on update (CRDT version vector)
+  confidence: number;            // 0.0–1.0
+  network: string;               // network ID
+  version: number;               // incremented on update (CRDT version)
   supersedes?: string;           // id of chunk this replaces
+
+  // ── Namespace / site fields ───────────────────────────────────────────────
+  collection?: string;           // named collection (e.g. 'patterns', 'guides')
+  slug?: string;                 // human-readable slug within agent+collection
+
+  // ── Rich content types ────────────────────────────────────────────────────
+  contentEnvelope?: ContentEnvelope;  // rich content; `content` is search summary
+
+  // ── Content linking ───────────────────────────────────────────────────────
+  links?: ContentLink[];         // typed directed edges to other chunks/agent:// URIs
+
+  // ── Security ──────────────────────────────────────────────────────────────
+  signature?: string;            // base64 Ed25519 signature over canonical chunk bytes
+  pow?: HashcashStamp;           // hashcash proof-of-work stamp (anti-spam)
+  origin?: 'local' | 'crawl' | 'replicated';
+  _tombstone?: boolean;          // internal: set by store.forget()
 }
 
-type MemoryType = 'skill' | 'project' | 'context' | 'pattern' | 'result';
-type MemoryNamespace = 'skill' | 'project';
+// Extended memory types (additive — original 5 types still valid)
+type MemoryType =
+  | 'skill' | 'project' | 'context' | 'pattern' | 'result'  // original
+  | 'document'      // Rich structured document
+  | 'schema'        // JSON Schema definition
+  | 'thread'        // Multi-agent conversation thread
+  | 'blob-manifest' // Binary blob manifest
+  | 'profile'       // Agent profile / namespace root
+
+// Rich content envelope (format + body + optional media refs)
+interface ContentEnvelope {
+  format: 'text' | 'markdown' | 'json' | 'code' | 'thread' | 'table' | 'composite';
+  body: string;
+  media?: MediaRef[];       // external/network-addressed media refs
+  schemaUri?: string;       // agent:// URI of a JSON Schema chunk for validation
+  metadata?: Record<string, string>;
+}
+
+// Media reference — agent://, ipfs://, https://, or inline data://
+interface MediaRef { uri: string; mimeType: string; size?: number; hash?: string; alt?: string; }
+
+// Typed directed edge between chunks (hyperlink layer)
+interface ContentLink {
+  target: string;  // chunk UUID or agent:// URI
+  rel: 'related' | 'depends-on' | 'supersedes' | 'references' | 'part-of' | 'reply-to' | 'see-also' | string;
+  label?: string;
+}
+```
+
+### agent:// URI Scheme
+
+Content on the Subspace network is globally addressable via the `agent://` URI scheme:
+
+```
+agent://<peerId>                             → agent profile root
+agent://<peerId>/<collection>                → collection listing
+agent://<peerId>/<collection>/<slug>         → specific chunk
+agent://<peerId>/blobs/<sha256hex>           → binary blob (content-addressed)
+```
+
+The PeerId IS the agent's public key (Ed25519 base58btc multi-hash). Resolving a URI queries the specific peer using the `/subspace/query/1.0.0` protocol (local cache checked first).
+
+### Discovery Architecture
+
+```
+Each agent daemon:
+  ├── Broadcasts DiscoveryManifest every 60s via GossipSub (_subspace/discovery)
+  │     Manifest contains:
+  │       • Bloom filter of all topics held (~256 bytes)
+  │       • Bloom filter of all chunk IDs held (~256 bytes)
+  │       • Collection list, chunk count, display name
+  │       • Optional PoW stamp
+  │
+  ├── Receives manifests from peers → updates local PeerIndex
+  │     PeerIndex enables O(1) "does peer X have topic Y?" queries (zero RTT)
+  │
+  └── Registers /subspace/browse/1.0.0 libp2p protocol handler
+        Browse requests return paginated ChunkStub listings (metadata, no content)
+        Used for "browsing" another agent's site
 ```
 
 ### Monorepo Structure
 
 ```
-agent-net/
+subspace-transceiver/
 ├── package.json                          # npm workspaces root
 ├── tsconfig.base.json                    # shared TS config (ESM, strict, NodeNext)
 ├── packages/
-│   ├── core/                             # @agent-net/core
+│   ├── core/                             # @subspace/core
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   ├── src/
 │   │   │   ├── index.ts                  # public exports
-│   │   │   ├── schema.ts                 # MemoryChunk interface + Zod validation
+│   │   │   ├── schema.ts                 # MemoryChunk + ContentEnvelope + ContentLink + Zod validation
 │   │   │   ├── crypto.ts                 # HKDF derivation + AES-256-GCM envelope
+│   │   │   ├── identity.ts               # Persistent Ed25519 agent identity (independent of PSK)
+│   │   │   ├── signing.ts                # Ed25519 chunk signing + verification
+│   │   │   ├── uri.ts                    # agent:// URI scheme (parse/build/resolve)
 │   │   │   ├── network.ts                # NetworkKeys type + network join/leave
 │   │   │   ├── node.ts                   # createLibp2pNode() factory
 │   │   │   ├── bootstrap.ts              # IPFS bootstrap + PL relay multiaddrs (constants)
 │   │   │   ├── store.ts                  # IMemoryStore interface + MemoryQuery type
 │   │   │   ├── orbitdb-store.ts          # OrbitDB v2 implementation of IMemoryStore
 │   │   │   ├── query.ts                  # filter logic + HEAD-of-chain resolution
-│   │   │   └── gc.ts                     # TTL GC: prune chunks where ttl < Date.now()
+│   │   │   ├── gc.ts                     # TTL GC: prune chunks where ttl < Date.now()
+│   │   │   ├── discovery.ts              # Bloom manifests + /subspace/browse/1.0.0 protocol
+│   │   │   ├── backlink-index.ts         # In-memory reverse link index for content graph
+│   │   │   ├── bloom.ts                  # Compact Bloom filter (256 bytes, 7 hashes)
+│   │   │   ├── reputation.ts             # Per-peer reputation scoring with decay + blacklist
+│   │   │   ├── pow.ts                    # Hashcash PoW stamps (16-20 bit difficulty)
+│   │   │   ├── rate-limiter.ts           # Sliding-window per-peer ingest rate limiter
+│   │   │   └── protocol.ts               # /subspace/query/1.0.0 wire protocol codec
 │   │   └── test/
 │   │       ├── schema.test.ts
 │   │       ├── crypto.test.ts
 │   │       ├── network.test.ts
 │   │       ├── store.test.ts             # integration: two in-process nodes + replication
 │   │       └── query.test.ts
-│   ├── daemon/                           # @agent-net/daemon
+│   ├── daemon/                           # @subspace/daemon
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── src/
 │   │       ├── index.ts                  # entrypoint: parse args, start daemon
-│   │       ├── config.ts                 # load/save ~/.agent-net/config.yaml
+│   │       ├── config.ts                 # load/save ~/.subspace/config.yaml
 │   │       ├── lifecycle.ts              # PID file, start/stop/status, --foreground
 │   │       ├── api.ts                    # Fastify HTTP API — all routes
 │   │       └── gc-scheduler.ts           # setInterval TTL GC runner
-│   ├── cli/                              # @agent-net/cli (published as `agent-net` bin)
+│   ├── cli/                              # @subspace/cli (published as `subspace` bin)
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── src/
@@ -244,7 +348,7 @@ agent-net/
 │   │           ├── daemon.ts             # daemon start|stop|status|restart|logs
 │   │           ├── network.ts            # network create|join|leave|list|info
 │   │           └── memory.ts             # memory put|get|query|scan|forget|update
-│   └── skill/                            # @agent-net/skill
+│   └── skill/                            # @subspace/skill
 │       ├── package.json
 │       ├── SKILL.md                      # agent-facing skill doc (pi/BMAD compatible)
 │       └── examples/
@@ -264,7 +368,7 @@ agent-net/
 - **`--json` flag**: Every CLI command outputs structured JSON for agent consumption
 - **Daemon auto-start**: CLI checks daemon health before each command; spawns daemon + waits up to 10s if not running
 - **`--local` / `--network` flags**: `memory query` defaults to `--local` (sub-10ms); `--network` broadcasts to peers + streams results
-- **Config location**: `~/.agent-net/config.yaml` — daemon port (default 7432), data dir, known networks, agentId
+- **Config location**: `~/.subspace/config.yaml` — daemon port (default 7432), data dir, known networks, agentId
 
 ### Key API Patterns
 
@@ -320,11 +424,11 @@ export function deriveNetworkKeys(psk: string): NetworkKeys {
   const derive = (info: string, len: number) =>
     Buffer.from(hkdfSync('sha256', keyMaterial, salt, Buffer.from(info), len))
   return {
-    dhtKey:      derive('agent-net/dht-key', 32),
-    topic:       derive('agent-net/topic', 32).toString('hex'),
-    envelopeKey: derive('agent-net/envelope', 32),
-    pskFilter:   derive('agent-net/psk-filter', 32),
-    peerId:      derive('agent-net/peer-id', 32),
+    dhtKey:      derive('subspace/dht-key', 32),
+    topic:       derive('subspace/topic', 32).toString('hex'),
+    envelopeKey: derive('subspace/envelope', 32),
+    pskFilter:   derive('subspace/psk-filter', 32),
+    peerId:      derive('subspace/peer-id', 32),
   }
 }
 ```
@@ -341,7 +445,7 @@ const datastore = new LevelDatastore(path.join(dataDir, 'datastore'))
 const helia = await createHelia({ libp2p: node, blockstore, datastore })
 const orbitdb = await createOrbitDB({ ipfs: helia, directory: path.join(dataDir, 'orbitdb') })
 // DB name includes networkId + namespace for isolation
-const db = await orbitdb.open(`agent-net/${networkId}/${namespace}`, { type: 'documents' })
+const db = await orbitdb.open(`subspace/${networkId}/${namespace}`, { type: 'documents' })
 await db.put({ ...chunk })                            // write (chunk.id = _id)
 const results = await db.query(doc => ...)            // local query
 ```
@@ -355,15 +459,15 @@ DEL  /networks/:networkId    → leave network
 POST /memory                 → MemoryChunk input → stored chunk with id
 GET  /memory/:id             → MemoryChunk | 404
 POST /memory/query           → MemoryQuery → MemoryChunk[] (local replica)
-POST /memory/scan            → MemoryQuery → MemoryChunk[] (network broadcast via /agent-net/query/1.0.0 protocol)
+POST /memory/scan            → MemoryQuery → MemoryChunk[] (network broadcast via /subspace/query/1.0.0 protocol)
 PATCH /memory/:id            → { content, confidence? } → server-side update (creates supersedes chain atomically)
 DEL  /memory/:id             → tombstone (forget)
 ```
 
-**Network query wire protocol (`/agent-net/query/1.0.0`):**
+**Network query wire protocol (`/subspace/query/1.0.0`):**
 GossipSub is pub/sub only — it has no request/response semantics. Network-wide memory scan uses a **custom libp2p protocol** instead:
 ```
-Protocol ID: /agent-net/query/1.0.0
+Protocol ID: /subspace/query/1.0.0
 
 Request (JSON, length-prefixed):
 { query: MemoryQuery, requestId: string }
@@ -371,30 +475,30 @@ Request (JSON, length-prefixed):
 Response (JSON, length-prefixed):
 { requestId: string, chunks: MemoryChunk[], peerId: string }
 ```
-- `POST /memory/scan` in `api.ts` iterates known peers in the network, opens a stream to each with `node.dialProtocol(peerId, '/agent-net/query/1.0.0')`, sends the request, reads response with a **5-second per-peer timeout**, merges and deduplicates results.
-- The daemon also registers `node.handle('/agent-net/query/1.0.0', handler)` on startup to answer incoming query requests from other peers using its local store.
+- `POST /memory/scan` in `api.ts` iterates known peers in the network, opens a stream to each with `node.dialProtocol(peerId, '/subspace/query/1.0.0')`, sends the request, reads response with a **5-second per-peer timeout**, merges and deduplicates results.
+- The daemon also registers `node.handle('/subspace/query/1.0.0', handler)` on startup to answer incoming query requests from other peers using its local store.
 - Responses are collected concurrently (Promise.allSettled), merged via `resolveHeads`, then returned. Failed/timed-out peers are skipped silently (logged at debug level).
 - Add `packages/core/src/protocol.ts` to implement the request/response codec (length-prefixed JSON over libp2p streams using `it-length-prefixed` + `it-pipe`).
 
 **CLI command surface:**
 ```
-agent-net daemon start [--foreground] [--port <n>]
-agent-net daemon stop | status | restart
+subspace daemon start [--foreground] [--port <n>]
+subspace daemon stop | status | restart
 
-agent-net network create --psk <key> [--name <label>]
-agent-net network join --psk <key>
-agent-net network leave <networkId>
-agent-net network list
+subspace network create --psk <key> [--name <label>]
+subspace network join --psk <key>
+subspace network leave <networkId>
+subspace network list
 
-agent-net memory put --type <type> --topic <tags...> --content <text>
+subspace memory put --type <type> --topic <tags...> --content <text>
               [--namespace skill|project] [--project <slug>]
               [--confidence <0-1>] [--ttl <seconds>]
-agent-net memory get <id>
-agent-net memory query --topic <tags...> [--type <type>] [--namespace <ns>]
+subspace memory get <id>
+subspace memory query --topic <tags...> [--type <type>] [--namespace <ns>]
               [--project <slug>] [--min-confidence <n>] [--local|--network]
-agent-net memory scan <freetext> [--local|--network]
-agent-net memory forget <id>
-agent-net memory update <id> --content <text> [--confidence <n>]
+subspace memory scan <freetext> [--local|--network]
+subspace memory forget <id>
+subspace memory update <id> --content <text> [--confidence <n>]
 
 # All commands support --json for structured output
 ```
@@ -411,12 +515,12 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 | NAT traversal | Circuit Relay v2 + DCUtR + AutoNAT + mDNS | Free, libp2p-native; mDNS-first for LAN peers |
 | Bootstrap | IPFS default bootstrappers + PL relay nodes (constants in bootstrap.ts) | Free, globally distributed |
 | CLI framework | commander@14.0.3 | Mature, TypeScript-first |
-| Packaging | npm packages + `npx agent-net` zero-install | Widest agent compatibility |
+| Packaging | npm packages + `npx subspace` zero-install | Widest agent compatibility |
 | Store abstraction | IMemoryStore interface in store.ts | Isolates OrbitDB v2 API churn; swap-safe |
 | Query model | Two-tier: --local (instant) + --network (stream) | Sub-10ms local; network only when needed |
 | Write model | Append-only + supersedes chain | Conflict-free; HEAD resolution in query.ts |
-| Peer identity | Derived from PSK via HKDF (agent-net/peer-id) | Deterministic across restarts |
-| Agent identity | AGENT_NET_AGENT_ID env var + config fallback | Consistent provenance on all chunks |
+| Peer identity | Derived from PSK via HKDF (subspace/peer-id) | Deterministic across restarts |
+| Agent identity | SUBSPACE_AGENT_ID env var + config fallback | Consistent provenance on all chunks |
 | Test framework | vitest@4.0.18 | Fast, TypeScript-native, ESM-compatible |
 
 ### Files to Reference
@@ -432,15 +536,15 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 | `packages/core/src/orbitdb-store.ts` | OrbitDB v2 implementation of IMemoryStore |
 | `packages/core/src/query.ts` | Filter logic + HEAD-of-chain resolution |
 | `packages/core/src/gc.ts` | TTL GC — prunes expired chunks |
-| `packages/daemon/src/config.ts` | ~/.agent-net/config.yaml load/save/defaults |
+| `packages/daemon/src/config.ts` | ~/.subspace/config.yaml load/save/defaults |
 | `packages/daemon/src/lifecycle.ts` | PID file, start/stop/status, --foreground |
 | `packages/daemon/src/api.ts` | Fastify HTTP API — all routes |
 | `packages/cli/src/client.ts` | HTTP fetch client + daemon auto-start logic |
 | `packages/cli/src/commands/memory.ts` | memory put/get/query/scan/forget/update |
 | `packages/cli/src/index.ts` | CLI root entrypoint (Commander.js) |
-| `packages/skill/SKILL.md` | Agent-facing skill: how to use agent-net CLI |
+| `packages/skill/SKILL.md` | Agent-facing skill: how to use subspace CLI |
 | `packages/skill/examples/agent-workflow.md` | Full flow: pull → query → push with real CLI calls |
-| `packages/core/src/protocol.ts` | /agent-net/query/1.0.0 wire protocol codec |
+| `packages/core/src/protocol.ts` | /subspace/query/1.0.0 wire protocol codec |
 
 ---
 
@@ -461,9 +565,9 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 
 - [x] **Task 3: Scaffold all four package directories**
   - Files: `packages/core/package.json`, `packages/daemon/package.json`, `packages/cli/package.json`, `packages/skill/package.json`
-  - Action: Create each `package.json` with correct `name` (`@agent-net/core` etc.), `"type": "module"`, `"exports"` map pointing to compiled output, and `"bin"` entry for CLI (`agent-net` → `dist/index.js`). Each gets its own `tsconfig.json` extending `../../tsconfig.base.json`.
+  - Action: Create each `package.json` with correct `name` (`@subspace/core` etc.), `"type": "module"`, `"exports"` map pointing to compiled output, and `"bin"` entry for CLI (`subspace` → `dist/index.js`). Each gets its own `tsconfig.json` extending `../../tsconfig.base.json`.
 
-#### Phase 2 — @agent-net/core: Foundations
+#### Phase 2 — @subspace/core: Foundations
 
 - [x] **Task 4: Implement MemoryChunk schema and validation**
   - File: `packages/core/src/schema.ts`
@@ -518,7 +622,7 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 
 - [x] **Task 10: Implement OrbitDB document store**
   - File: `packages/core/src/orbitdb-store.ts`
-  - Action: Export `createOrbitDBStore(node: Libp2p, networkKeys: NetworkKeys, namespace: MemoryNamespace, dataDir: string): Promise<IMemoryStore>`. Internally: create `LevelBlockstore` + `LevelDatastore`, call `createHelia({ libp2p: node, blockstore, datastore })`, call `createOrbitDB({ ipfs: helia, directory })`, open document DB named `agent-net/${networkKeys.topic}/${namespace}`. Implement `IMemoryStore`: `put()` calls `db.put({ _id: chunk.id, ...chunk })`, `get()` calls `db.get(id)`, `query()` calls `db.query()` with filter function mapping `MemoryQuery` fields, `forget()` puts a tombstone doc `{ _id: id, _tombstone: true, id, forgotten: true }`. On `db.events.on('update')`, emit `'replicated'`.
+  - Action: Export `createOrbitDBStore(node: Libp2p, networkKeys: NetworkKeys, namespace: MemoryNamespace, dataDir: string): Promise<IMemoryStore>`. Internally: create `LevelBlockstore` + `LevelDatastore`, call `createHelia({ libp2p: node, blockstore, datastore })`, call `createOrbitDB({ ipfs: helia, directory })`, open document DB named `subspace/${networkKeys.topic}/${namespace}`. Implement `IMemoryStore`: `put()` calls `db.put({ _id: chunk.id, ...chunk })`, `get()` calls `db.get(id)`, `query()` calls `db.query()` with filter function mapping `MemoryQuery` fields, `forget()` puts a tombstone doc `{ _id: id, _tombstone: true, id, forgotten: true }`. On `db.events.on('update')`, emit `'replicated'`.
   - Notes: Tombstone pattern (not physical delete) is required for CRDT consistency — deletes must propagate to all peers.
 
 - [x] **Task 11: Implement query filter and HEAD-of-chain resolution**
@@ -539,7 +643,7 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 
 - [x] **Task 13b: Implement network query wire protocol codec**
   - File: `packages/core/src/protocol.ts`
-  - Action: Export `QUERY_PROTOCOL = '/agent-net/query/1.0.0'`. Export `QueryRequest` type: `{ query: MemoryQuery, requestId: string }`. Export `QueryResponse` type: `{ requestId: string, chunks: MemoryChunk[], peerId: string }`. Export `encodeMessage(msg: unknown): Uint8Array` and `decodeMessage<T>(data: Uint8Array): T` — length-prefixed JSON using `it-length-prefixed` + `it-pipe`. Export `sendQuery(node: Libp2p, peerId: PeerId, query: MemoryQuery): Promise<QueryResponse>` — dials the peer, opens stream on `QUERY_PROTOCOL`, sends request, reads response, closes stream. Timeout: 5000ms. Throws `NetworkError` with code `PEER_DIAL_FAILED` on timeout or connection error.
+  - Action: Export `QUERY_PROTOCOL = '/subspace/query/1.0.0'`. Export `QueryRequest` type: `{ query: MemoryQuery, requestId: string }`. Export `QueryResponse` type: `{ requestId: string, chunks: MemoryChunk[], peerId: string }`. Export `encodeMessage(msg: unknown): Uint8Array` and `decodeMessage<T>(data: Uint8Array): T` — length-prefixed JSON using `it-length-prefixed` + `it-pipe`. Export `sendQuery(node: Libp2p, peerId: PeerId, query: MemoryQuery): Promise<QueryResponse>` — dials the peer, opens stream on `QUERY_PROTOCOL`, sends request, reads response, closes stream. Timeout: 5000ms. Throws `NetworkError` with code `PEER_DIAL_FAILED` on timeout or connection error.
 
 - [x] **Task 14: Wire up core public exports**
   - File: `packages/core/src/index.ts`
@@ -553,15 +657,15 @@ agent-net memory update <id> --content <text> [--confidence <n>]
     - `query.test.ts`: `resolveHeads` returns correct HEAD from a 3-chunk chain. TTL-expired chunks filtered out. `buildOrbitFilter` correctly matches/excludes on each field.
     - `store.test.ts` (integration): spin up two `createLibp2pNode` instances on loopback, join same network, put a chunk on node A, wait for `'replicated'` event on node B, assert chunk queryable on B.
 
-#### Phase 3 — @agent-net/daemon
+#### Phase 3 — @subspace/daemon
 
 - [x] **Task 16: Implement config management**
   - File: `packages/daemon/src/config.ts`
-  - Action: Export `DaemonConfig` type: `{ port: number, dataDir: string, agentId: string, networks: Array<{ psk: string, name?: string }> }`. Export `loadConfig(): Promise<DaemonConfig>` — reads `~/.agent-net/config.yaml`, merges with defaults (`port: 7432`, `dataDir: ~/.agent-net/data`). **`agentId` default**: `process.env.AGENT_NET_AGENT_ID ?? null`. If `null` after loading, the daemon must **log a startup warning** ("No AGENT_NET_AGENT_ID set — memory provenance will use peer ID as agentId") and fall back to the local libp2p peer ID string as agentId (set after node creation in `index.ts`). This ensures provenance is always unique per machine even without explicit identity. The `'unknown'` default is explicitly prohibited. Export `saveConfig(config: DaemonConfig): Promise<void>`. Creates `~/.agent-net/` directory if not exists. Uses `yaml` package for parse/stringify.
+  - Action: Export `DaemonConfig` type: `{ port: number, dataDir: string, agentId: string, networks: Array<{ psk: string, name?: string }> }`. Export `loadConfig(): Promise<DaemonConfig>` — reads `~/.subspace/config.yaml`, merges with defaults (`port: 7432`, `dataDir: ~/.subspace/data`). **`agentId` default**: `process.env.SUBSPACE_AGENT_ID ?? null`. If `null` after loading, the daemon must **log a startup warning** ("No SUBSPACE_AGENT_ID set — memory provenance will use peer ID as agentId") and fall back to the local libp2p peer ID string as agentId (set after node creation in `index.ts`). This ensures provenance is always unique per machine even without explicit identity. The `'unknown'` default is explicitly prohibited. Export `saveConfig(config: DaemonConfig): Promise<void>`. Creates `~/.subspace/` directory if not exists. Uses `yaml` package for parse/stringify.
 
 - [x] **Task 17: Implement daemon lifecycle (PID file)**
   - File: `packages/daemon/src/lifecycle.ts`
-  - Action: Export `writePid(port: number): void` — writes `~/.agent-net/daemon.pid` containing `{ pid: process.pid, port, startedAt }`. Export `readPid(): { pid: number, port: number, startedAt: number } | null`. Export `clearPid(): void`. Export `isDaemonRunning(): boolean` — reads PID file, checks `process.kill(pid, 0)`. Export `startDaemonProcess(foreground: boolean, port: number): Promise<void>` — if `foreground`, initialises inline; if not, spawns detached child process with `stdio: 'ignore'`, `detached: true`, then `unref()`.
+  - Action: Export `writePid(port: number): void` — writes `~/.subspace/daemon.pid` containing `{ pid: process.pid, port, startedAt }`. Export `readPid(): { pid: number, port: number, startedAt: number } | null`. Export `clearPid(): void`. Export `isDaemonRunning(): boolean` — reads PID file, checks `process.kill(pid, 0)`. Export `startDaemonProcess(foreground: boolean, port: number): Promise<void>` — if `foreground`, initialises inline; if not, spawns detached child process with `stdio: 'ignore'`, `detached: true`, then `unref()`.
 
 - [x] **Task 18: Implement Fastify HTTP API**
   - File: `packages/daemon/src/api.ts`
@@ -573,10 +677,10 @@ agent-net memory update <id> --content <text> [--confidence <n>]
     - `POST /memory` body `Omit<MemoryChunk, 'id' | 'version' | 'source.peerId'>` → fills in `id` (uuid), `version: 1`, `source.peerId` (local peer ID), `source.agentId` (from config), calls `store.put()`, returns full chunk
     - `GET /memory/:id` → `store.get(id)` → 200 or 404
     - `POST /memory/query` body `MemoryQuery` → `store.query(q)` (local only)
-    - `POST /memory/scan` body `MemoryQuery` → dial each known peer with `/agent-net/query/1.0.0` protocol, collect responses concurrently (Promise.allSettled, 5s per-peer timeout), merge + deduplicate + `resolveHeads`, return
+    - `POST /memory/scan` body `MemoryQuery` → dial each known peer with `/subspace/query/1.0.0` protocol, collect responses concurrently (Promise.allSettled, 5s per-peer timeout), merge + deduplicate + `resolveHeads`, return
     - `PATCH /memory/:id` body `{ content: string, confidence?: number }` → server-side: get existing chunk, create new chunk with new UUID + `supersedes: id` + `version: prev.version + 1`, call `store.put()`, return new chunk. **Fork tie-breaking rule**: if `resolveHeads` encounters multiple chunks with no superseder (concurrent fork), the chunk with the highest `source.timestamp` is HEAD. Document this rule in `query.ts`.
     - `DELETE /memory/:id` → `store.forget(id)`
-  - Notes: All error responses use `{ error: string, code: string }` shape. Daemon must register `/agent-net/query/1.0.0` protocol handler on startup (in `index.ts`) so it can respond to incoming peer queries.
+  - Notes: All error responses use `{ error: string, code: string }` shape. Daemon must register `/subspace/query/1.0.0` protocol handler on startup (in `index.ts`) so it can respond to incoming peer queries.
 
 - [x] **Task 19: Implement periodic GC scheduler**
   - File: `packages/daemon/src/gc-scheduler.ts`
@@ -586,7 +690,7 @@ agent-net memory update <id> --content <text> [--confidence <n>]
   - File: `packages/daemon/src/index.ts`
   - Action: Parse CLI args (`--foreground`, `--port`). Load config. Call `createApi`. Start Fastify on `config.port`. Write PID file. Re-join all networks from config (so daemon automatically reconnects to known networks on restart). Start GC scheduler. Handle `SIGTERM` / `SIGINT` gracefully: close all stores, stop libp2p nodes, clear PID, drain Fastify. On uncaught exception, log + clean up + exit 1.
 
-#### Phase 4 — @agent-net/cli
+#### Phase 4 — @subspace/cli
 
 - [x] **Task 21: Implement daemon HTTP client with auto-start**
   - File: `packages/cli/src/client.ts`
@@ -624,18 +728,18 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 
 - [x] **Task 26: Wire up CLI root entrypoint**
   - File: `packages/cli/src/index.ts`
-  - Action: Create Commander root program `agent-net`. Set version from `package.json`. Register subcommand groups from `daemon.ts`, `network.ts`, `memory.ts`. Add global `--port <n>` option (default 7432) passed to all commands. Add `--json` global option. Call `program.parseAsync(process.argv)`. Add `process.on('unhandledRejection')` → `printError` + exit 1.
+  - Action: Create Commander root program `subspace`. Set version from `package.json`. Register subcommand groups from `daemon.ts`, `network.ts`, `memory.ts`. Add global `--port <n>` option (default 7432) passed to all commands. Add `--json` global option. Call `program.parseAsync(process.argv)`. Add `process.on('unhandledRejection')` → `printError` + exit 1.
   - Notes: The `bin` field in `package.json` must point to compiled `dist/index.js` with shebang `#!/usr/bin/env node`.
 
-#### Phase 5 — @agent-net/skill
+#### Phase 5 — @subspace/skill
 
 - [x] **Task 27: Write agent-facing skill document**
   - File: `packages/skill/SKILL.md`
   - Action: Write a BMAD/pi-compatible skill markdown with sections:
-    - **When to use**: "Use agent-net when you need to store, retrieve, or share memory across sessions, machines, or agents."
-    - **Prerequisites**: daemon must be running (`agent-net daemon status`); must be joined to at least one network.
+    - **When to use**: "Use subspace when you need to store, retrieve, or share memory across sessions, machines, or agents."
+    - **Prerequisites**: daemon must be running (`subspace daemon status`); must be joined to at least one network.
     - **Quick reference**: full CLI command table with one-line descriptions
-    - **Agent identity**: set `AGENT_NET_AGENT_ID=<your-model-id>` before running any command
+    - **Agent identity**: set `SUBSPACE_AGENT_ID=<your-model-id>` before running any command
     - **Memory types guide**: when to use each type (skill / project / context / pattern / result)
     - **Output format**: all commands support `--json` — always use `--json` for programmatic parsing
     - **Error handling**: what each error code means and how to recover
@@ -644,12 +748,12 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 - [x] **Task 28: Write end-to-end agent workflow example**
   - File: `packages/skill/examples/agent-workflow.md`
   - Action: Write a complete, runnable example showing the full agent memory loop:
-    1. **Before starting a task**: `agent-net memory query --topic typescript,error-handling --namespace project --project myapp --json` — parse and read results
-    2. **Check for existing patterns**: `agent-net memory query --type pattern --topic async --local --json`
-    3. **During task — store a discovery**: `agent-net memory put --type pattern --topic typescript,async,error-handling --content "Always wrap OrbitDB put() calls in try/catch — it throws on block store failure, not just on validation" --confidence 0.9 --json`
-    4. **After task — store result**: `agent-net memory put --type result --topic typescript,refactor --project myapp --content "Completed auth module refactor. Key decision: moved validation to middleware layer. See commit abc123." --confidence 1.0 --json`
-    5. **Update stale memory**: `agent-net memory update <id> --content "Updated: validation moved back to service layer in v2" --confidence 0.85 --json`
-    6. **Share skill across projects**: `agent-net memory put --type skill --namespace skill --topic libp2p,nat-traversal --content "DCUtR hole punching requires both peers to be connected to the same relay first. Always bootstrap before expecting direct connections." --confidence 0.95 --json`
+    1. **Before starting a task**: `subspace memory query --topic typescript,error-handling --namespace project --project myapp --json` — parse and read results
+    2. **Check for existing patterns**: `subspace memory query --type pattern --topic async --local --json`
+    3. **During task — store a discovery**: `subspace memory put --type pattern --topic typescript,async,error-handling --content "Always wrap OrbitDB put() calls in try/catch — it throws on block store failure, not just on validation" --confidence 0.9 --json`
+    4. **After task — store result**: `subspace memory put --type result --topic typescript,refactor --project myapp --content "Completed auth module refactor. Key decision: moved validation to middleware layer. See commit abc123." --confidence 1.0 --json`
+    5. **Update stale memory**: `subspace memory update <id> --content "Updated: validation moved back to service layer in v2" --confidence 0.85 --json`
+    6. **Share skill across projects**: `subspace memory put --type skill --namespace skill --topic libp2p,nat-traversal --content "DCUtR hole punching requires both peers to be connected to the same relay first. Always bootstrap before expecting direct connections." --confidence 0.95 --json`
     - Include expected JSON output shapes for each command. Include error recovery examples.
 
 ---
@@ -681,7 +785,7 @@ agent-net memory update <id> --content <text> [--confidence <n>]
   Given a chunk stored with `ttl` set to 1 second in the past, when `POST /memory/query` is called, then the expired chunk is not returned. When `runGC` is called, then the expired chunk count is included in the `pruned` return value.
 
 - [ ] **AC 9: Daemon auto-starts when CLI is invoked**
-  Given the daemon is not running, when `agent-net memory list --json` is called, then the CLI starts the daemon, waits for it to be healthy, and returns results — all within 15 seconds. Given the daemon does not become healthy within 10 seconds, then the CLI exits with code 1 and prints `{ error: "Daemon failed to start", code: "DAEMON_TIMEOUT" }`.
+  Given the daemon is not running, when `subspace memory list --json` is called, then the CLI starts the daemon, waits for it to be healthy, and returns results — all within 15 seconds. Given the daemon does not become healthy within 10 seconds, then the CLI exits with code 1 and prints `{ error: "Daemon failed to start", code: "DAEMON_TIMEOUT" }`.
 
 - [ ] **AC 10: Daemon binds only to localhost**
   Given the daemon is running, when a network scan is performed for open ports, then port 7432 (or configured port) is bound exclusively to `127.0.0.1`, not `0.0.0.0`.
@@ -696,10 +800,10 @@ agent-net memory update <id> --content <text> [--confidence <n>]
   Given a daemon joined to a network, when the daemon process is stopped and restarted with the same PSK and config, then the peer ID reported in `GET /health` is identical to the pre-restart peer ID.
 
 - [ ] **AC 14: Daemon `--foreground` flag works in non-TTY environment**
-  Given a CI/container environment, when `agent-net daemon start --foreground` is run, then the process stays in the foreground (does not daemonize), logs to stdout, and exits cleanly on `SIGTERM`.
+  Given a CI/container environment, when `subspace daemon start --foreground` is run, then the process stays in the foreground (does not daemonize), logs to stdout, and exits cleanly on `SIGTERM`.
 
 - [ ] **AC 15: Memory `update` creates a supersedes chain**
-  Given a chunk with `id: "abc"` exists in the store, when `agent-net memory update abc --content "new content" --json` is called, then a new chunk is stored with a new UUID, `supersedes: "abc"`, and `version: 2`. When `memory query` is run, then only the new chunk appears (not both).
+  Given a chunk with `id: "abc"` exists in the store, when `subspace memory update abc --content "new content" --json` is called, then a new chunk is stored with a new UUID, `supersedes: "abc"`, and `version: 2`. When `memory query` is run, then only the new chunk appears (not both).
 
 - [ ] **AC 16: mDNS peers connect without relay**
   Given two daemon instances on the same LAN/loopback with the same PSK, when both are started, then peer discovery completes via mDNS within 30 seconds and replication occurs without using any circuit relay node (verified by checking connection metadata).
@@ -708,7 +812,7 @@ agent-net memory update <id> --content <text> [--confidence <n>]
   Given the daemon is started and the local store contains chunks with expired TTLs from a previous session, when the daemon initialises, then `runGC` is called once before the API begins serving requests, and expired chunks are tombstoned.
 
 - [ ] **AC 18: Skill document is self-contained for a fresh agent**
-  Given a fresh agent context with only `packages/skill/SKILL.md` loaded, when the agent is asked to "store a project memory", then the agent can produce a correct `agent-net memory put` invocation without needing any other files.
+  Given a fresh agent context with only `packages/skill/SKILL.md` loaded, when the agent is asked to "store a project memory", then the agent can produce a correct `subspace memory put` invocation without needing any other files.
 
 ---
 
@@ -716,7 +820,7 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 
 ### Dependencies
 
-**`@agent-net/core` dependencies (exact versions, all pinned — no `^` or `~`):**
+**`@subspace/core` dependencies (exact versions, all pinned — no `^` or `~`):**
 ```json
 {
   "libp2p": "3.1.4",
@@ -744,24 +848,24 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 }
 ```
 
-**`@agent-net/daemon` dependencies:**
+**`@subspace/daemon` dependencies:**
 ```json
 {
-  "@agent-net/core": "workspace:*",
+  "@subspace/core": "workspace:*",
   "fastify": "5.7.4",
   "yaml": "2.8.2"
 }
 ```
 
-**`@agent-net/cli` dependencies:**
+**`@subspace/cli` dependencies:**
 ```json
 {
-  "@agent-net/core": "workspace:*",
+  "@subspace/core": "workspace:*",
   "commander": "14.0.3"
 }
 ```
 
-**`@agent-net/skill` dependencies:** none (markdown only)
+**`@subspace/skill` dependencies:** none (markdown only)
 
 **Dev dependencies (root):**
 ```json
@@ -791,14 +895,14 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 
 **CLI tests** (`packages/cli/test/`):
 - Spawn daemon process in test setup, kill in teardown
-- Run `agent-net` subprocesses via `node:child_process` `execFile`
+- Run `subspace` subprocesses via `node:child_process` `execFile`
 - Assert exit codes, stdout JSON shapes
 - Test auto-start: kill daemon, run command, assert daemon restarts
 
 **Manual smoke tests** (documented in `docs/testing.md`):
 - Two machines on different networks (one behind NAT), same PSK, verify replication via relay
-- `npx agent-net daemon start` from zero-install
-- Container: `docker run node agent-net daemon start --foreground`
+- `npx subspace daemon start` from zero-install
+- Container: `docker run node subspace daemon start --foreground`
 
 ### Notes
 
@@ -816,12 +920,12 @@ agent-net memory update <id> --content <text> [--confidence <n>]
 - Memory GC: a background process in the daemon should prune expired TTL chunks on startup and periodically.
 - Daemon cold-start (OrbitDB + Helia init) can take 3-5s — CLI must auto-start daemon if not running and wait with status indicator.
 - Daemon needs `--foreground` flag for Docker/container/CI environments where daemonizing is not appropriate.
-- `npx agent-net` zero-install UX must work — CLI package must be self-contained.
+- `npx subspace` zero-install UX must work — CLI package must be self-contained.
 - mDNS local discovery takes priority over relay for same-LAN peers to minimize latency.
 - Write conflicts: never update-in-place. Always append a new chunk with `supersedes: <previous-id>`. Query layer returns HEAD of each chain. This must be enforced in `store.ts`.
 - HKDF derivation map (full):
-  - `info: "agent-net/dht-key"` → DHT announcement key
-  - `info: "agent-net/topic"` → GossipSub topic name
-  - `info: "agent-net/envelope"` → AES-256-GCM symmetric envelope key
-  - `info: "agent-net/psk-filter"` → libp2p private network PSK filter
-  - `info: "agent-net/peer-id"` → deterministic peer identity seed (daemon restarts as same peer)
+  - `info: "subspace/dht-key"` → DHT announcement key
+  - `info: "subspace/topic"` → GossipSub topic name
+  - `info: "subspace/envelope"` → AES-256-GCM symmetric envelope key
+  - `info: "subspace/psk-filter"` → libp2p private network PSK filter
+  - `info: "subspace/peer-id"` → deterministic peer identity seed (daemon restarts as same peer)

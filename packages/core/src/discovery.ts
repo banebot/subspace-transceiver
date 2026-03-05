@@ -1,5 +1,5 @@
 /**
- * Content discovery layer for agent-net.
+ * Content discovery layer for Subspace Transceiver.
  *
  * ARCHITECTURE
  * ────────────
@@ -13,7 +13,7 @@
  *    Peers receive manifests, update their local PeerIndex, and can answer
  *    "does agent X probably have content about topic Y?" with zero round-trips.
  *
- * 2. ACTIVE — Browse queries via the /agent-net/browse/1.0.0 libp2p protocol.
+ * 2. ACTIVE — Browse queries via the /subspace/browse/1.0.0 libp2p protocol.
  *    Browse requests return paginated chunk metadata (not full content) from
  *    a specific peer. Used for displaying "what's on this agent's site."
  *
@@ -43,8 +43,8 @@ import { type HashcashStamp, type StampCache, verifyStamp } from './pow.js'
 // Protocol identifiers
 // ---------------------------------------------------------------------------
 
-export const DISCOVERY_TOPIC = '_agent-net/discovery'
-export const BROWSE_PROTOCOL = '/agent-net/browse/1.0.0'
+export const DISCOVERY_TOPIC = '_subspace/discovery'
+export const BROWSE_PROTOCOL = '/subspace/browse/1.0.0'
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -184,7 +184,7 @@ export class DiscoveryManager {
       // @ts-expect-error
       this.node.services.pubsub.addEventListener('message', this.handleGossipMessage.bind(this))
     } catch (err) {
-      console.warn('[agent-net] Discovery: could not subscribe to GossipSub topic:', err)
+      console.warn('[subspace] Discovery: could not subscribe to GossipSub topic:', err)
     }
 
     // Register browse protocol handler
@@ -194,7 +194,7 @@ export class DiscoveryManager {
         await this.handleBrowseRequest(stream as BrowseDuplexStream)
       })
     } catch (err) {
-      console.warn('[agent-net] Discovery: could not register browse protocol:', err)
+      console.warn('[subspace] Discovery: could not register browse protocol:', err)
     }
 
     // Broadcast initial manifest, then on interval
@@ -342,7 +342,7 @@ export class DiscoveryManager {
     } catch (err) {
       // Swallow — no peers connected is normal early in startup
       if (!(String(err).includes('not subscribed') || String(err).includes('no peers'))) {
-        console.warn('[agent-net] Discovery: manifest broadcast error:', err)
+        console.warn('[subspace] Discovery: manifest broadcast error:', err)
       }
     }
   }
@@ -372,7 +372,7 @@ export class DiscoveryManager {
       try {
         pow = await this.opts.stampCache.getOrMine(this.opts.localPeerId, 'manifest', bits, windowMs)
       } catch (err) {
-        console.warn('[agent-net] Discovery: failed to mine manifest stamp:', err)
+        console.warn('[subspace] Discovery: failed to mine manifest stamp:', err)
       }
     }
 
@@ -405,15 +405,15 @@ export class DiscoveryManager {
 
         if (!manifest.pow) {
           if (this.opts.requirePoW) {
-            console.warn(`[agent-net] Discovery: dropped manifest from ${manifest.peerId} — missing PoW stamp`)
+            console.warn(`[subspace] Discovery: dropped manifest from ${manifest.peerId} — missing PoW stamp`)
             return
           }
           // No stamp but not required — log warning and allow
-          console.warn(`[agent-net] Discovery: manifest from ${manifest.peerId} has no PoW stamp (requirePoW=false, allowing)`)
+          console.warn(`[subspace] Discovery: manifest from ${manifest.peerId} has no PoW stamp (requirePoW=false, allowing)`)
         } else {
           const valid = verifyStamp(manifest.pow, manifest.peerId, 'manifest', bits, windowMs)
           if (!valid) {
-            console.warn(`[agent-net] Discovery: dropped manifest from ${manifest.peerId} — invalid PoW stamp`)
+            console.warn(`[subspace] Discovery: dropped manifest from ${manifest.peerId} — invalid PoW stamp`)
             return
           }
         }
@@ -485,7 +485,7 @@ export class DiscoveryManager {
       async function* res() { yield encodeMessage(response) }
       await pipe(res(), (s) => lp.encode(s), stream.sink)
     } catch (err) {
-      console.warn('[agent-net] Browse handler error:', err)
+      console.warn('[subspace] Browse handler error:', err)
     }
   }
 

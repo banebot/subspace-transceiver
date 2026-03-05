@@ -1,5 +1,5 @@
 /**
- * HTTP client for the agent-net daemon.
+ * HTTP client for the Subspace Transceiver daemon.
  *
  * All methods call ensureDaemon() before making requests — if the daemon
  * is not running, it is automatically started and polled for up to 10s.
@@ -10,20 +10,20 @@ import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { DaemonError, ErrorCode } from '@agent-net/core'
+import { DaemonError, ErrorCode } from '@subspace/core'
 import type {
   MemoryChunk,
   MemoryQuery,
   NetworkInfoDTO,
   ContentLink,
-} from '@agent-net/core'
+} from '@subspace/core'
 import type {
   ChunkStub,
   BrowseResponse,
   PeerIndexEntry,
-} from '@agent-net/core'
+} from '@subspace/core'
 
-const PID_PATH = join(homedir(), '.agent-net', 'daemon.pid')
+const PID_PATH = join(homedir(), '.subspace', 'daemon.pid')
 
 // ---------------------------------------------------------------------------
 // Daemon auto-start
@@ -54,7 +54,7 @@ export async function ensureDaemon(port: number = 7432): Promise<void> {
   } else {
     let npmDaemonPath: string | null = null
     try {
-      npmDaemonPath = fileURLToPath(import.meta.resolve('@agent-net/daemon'))
+      npmDaemonPath = fileURLToPath(import.meta.resolve('@subspace/daemon'))
     } catch { /* not available */ }
 
     if (npmDaemonPath && existsSync(npmDaemonPath)) {
@@ -282,7 +282,7 @@ export class DaemonClient {
     benchmark: {
       bitsUsed: number
       mineTimeMs: number
-      stamp: import('@agent-net/core').HashcashStamp | null
+      stamp: import('@subspace/core').HashcashStamp | null
     }
   }> {
     return this.fetch('/security/pow-status')

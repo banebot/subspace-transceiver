@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-const PID_PATH = join(homedir(), '.agent-net', 'daemon.pid')
+const PID_PATH = join(homedir(), '.subspace', 'daemon.pid')
 
 function getOpts(cmd: Command): { json: boolean; port: number } {
   const parent = cmd.parent?.parent ?? cmd.parent ?? cmd
@@ -16,7 +16,7 @@ function getOpts(cmd: Command): { json: boolean; port: number } {
 }
 
 export function buildDaemonCommand(): Command {
-  const daemon = new Command('daemon').description('Manage the agent-net daemon process')
+  const daemon = new Command('daemon').description('Manage the Subspace Transceiver daemon process')
 
   // ---------------------------------------------------------------------------
   // daemon start

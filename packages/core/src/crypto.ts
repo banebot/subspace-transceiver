@@ -1,5 +1,5 @@
 /**
- * Cryptographic primitives for agent-net.
+ * Cryptographic primitives for Subspace Transceiver.
  *
  * ALL key derivation flows through deriveNetworkKeys().
  * ALL symmetric encryption uses encryptEnvelope() / decryptEnvelope().
@@ -59,7 +59,7 @@ export function validatePSK(psk: string): void {
   }
   if (psk.length < 32) {
     console.warn(
-      `[agent-net] WARNING: PSK is only ${psk.length} characters. ` +
+      `[subspace] WARNING: PSK is only ${psk.length} characters. ` +
         'For production networks, use a PSK of at least 32 characters. ' +
         'Generate one with: openssl rand -hex 32'
     )
@@ -87,11 +87,11 @@ export function deriveNetworkKeys(psk: string): NetworkKeys {
     Buffer.from(hkdfSync('sha256', keyMaterial, salt, Buffer.from(info, 'utf8'), len))
 
   return {
-    dhtKey: derive('agent-net/dht-key', 32),
-    topic: derive('agent-net/topic', 32).toString('hex'),
-    envelopeKey: derive('agent-net/envelope', 32),
-    pskFilter: derive('agent-net/psk-filter', 32),
-    peerId: derive('agent-net/peer-id', 32),
+    dhtKey: derive('subspace/dht-key', 32),
+    topic: derive('subspace/topic', 32).toString('hex'),
+    envelopeKey: derive('subspace/envelope', 32),
+    pskFilter: derive('subspace/psk-filter', 32),
+    peerId: derive('subspace/peer-id', 32),
   }
 }
 

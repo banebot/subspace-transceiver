@@ -1,7 +1,7 @@
 /**
  * Daemon lifecycle management — PID file read/write/clear, start/stop.
  *
- * The PID file at ~/.agent-net/daemon.pid tracks the running daemon process.
+ * The PID file at ~/.subspace/daemon.pid tracks the running daemon process.
  * It contains JSON: { pid, port, startedAt }.
  */
 

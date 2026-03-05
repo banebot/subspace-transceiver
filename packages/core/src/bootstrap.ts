@@ -1,5 +1,5 @@
 /**
- * Hardcoded bootstrap and relay multiaddrs for the agent-net P2P layer.
+ * Hardcoded bootstrap and relay multiaddrs for the Subspace P2P layer.
  *
  * BOOTSTRAP_ADDRESSES: IPFS default bootstrap nodes (Cloudflare + Protocol Labs).
  * RELAY_ADDRESSES: Protocol Labs public circuit relay v2 nodes for NAT traversal.

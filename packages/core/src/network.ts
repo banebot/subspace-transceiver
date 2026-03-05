@@ -1,5 +1,5 @@
 /**
- * Network join/leave orchestration for agent-net.
+ * Network join/leave orchestration for Subspace Transceiver.
  *
  * A "network" is defined by a PSK. All peers with the same PSK share:
  * - The same DHT announcement key (peer discovery)
@@ -239,7 +239,7 @@ export async function leaveNetwork(session: NetworkSession): Promise<void> {
   await Promise.resolve(session.node.stop()).catch((e: unknown) => errors.push(e))
 
   if (errors.length > 0) {
-    console.warn('[agent-net] Errors during network leave:', errors)
+    console.warn('[subspace] Errors during network leave:', errors)
   }
 }
 

@@ -1,5 +1,5 @@
 /**
- * IMemoryStore — the core abstraction for agent-net memory storage.
+ * IMemoryStore — the core abstraction for Subspace Transceiver memory storage.
  *
  * All store operations go through this interface. The OrbitDB implementation
  * is hidden in orbitdb-store.ts. This separation guards against OrbitDB/Helia

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * @agent-net/cli — agent-net command-line interface
+ * @subspace/cli — Subspace Transceiver command-line interface
  *
- * Usage: agent-net [options] <command>
+ * Usage: subspace [options] <command>
  *
  * Global options:
  *   --port <n>   Daemon port (default: 7432)
@@ -22,7 +22,7 @@ import { buildDiscoverCommand, buildBrowseCommand, buildSecurityCommand } from '
 const program = new Command()
 
 program
-  .name('agent-net')
+  .name('subspace')
   .description('Decentralized agent memory — store, query, and share memory across agents')
   .version('0.2.0')
   .option('--port <n>', 'Daemon port (default: 7432)', '7432')

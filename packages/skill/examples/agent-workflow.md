@@ -1,6 +1,6 @@
 # Agent Workflow: Pull → Query → Push
 
-A complete runnable example of the agent memory loop.
+A complete runnable example of the Subspace Transceiver agent memory loop.
 Copy-paste any invocation directly — all commands are real.
 
 ---
@@ -9,16 +9,16 @@ Copy-paste any invocation directly — all commands are real.
 
 ```bash
 # Set your agent identity
-export AGENT_NET_AGENT_ID=claude-3-7-sonnet
+export SUBSPACE_AGENT_ID=claude-3-7-sonnet
 
 # Confirm daemon is running
-agent-net daemon status --json
+subspace daemon status --json
 # Expected: { "running": true, "status": "ok", "uptime": 42, ... }
 
 # Confirm you're in a network
-agent-net network list --json
+subspace network list --json
 # Expected: [{ "id": "a1b2c3...", "peers": 2, ... }]
-# If empty: agent-net network join --psk <your-psk> --json
+# If empty: subspace network join --psk <your-psk> --json
 ```
 
 ---
@@ -28,7 +28,7 @@ agent-net network list --json
 Check if other agents have left relevant memories for the project:
 
 ```bash
-agent-net memory query \
+subspace memory query \
   --topic typescript,error-handling \
   --namespace project \
   --project myapp \
@@ -69,7 +69,7 @@ agent-net memory query \
 Look for patterns that apply across projects:
 
 ```bash
-agent-net memory query \
+subspace memory query \
   --type pattern \
   --topic async,typescript \
   --namespace skill \
@@ -101,7 +101,7 @@ agent-net memory query \
 Found something important while working? Store it immediately:
 
 ```bash
-agent-net memory put \
+subspace memory put \
   --type pattern \
   --namespace skill \
   --topic typescript,async,orbitdb \
@@ -136,7 +136,7 @@ agent-net memory put \
 Record what was built and the key decisions made:
 
 ```bash
-agent-net memory put \
+subspace memory put \
   --type result \
   --namespace project \
   --project myapp \
@@ -154,11 +154,11 @@ Discovered a previous memory is outdated?
 
 ```bash
 # First find the chunk to update
-agent-net memory query --topic libp2p,nat-traversal --namespace skill --json
+subspace memory query --topic libp2p,nat-traversal --namespace skill --json
 # Note the id from the output, e.g. "9a8b7c6d-..."
 
 # Update it — creates a new chunk with supersedes: <old-id>
-agent-net memory update 9a8b7c6d-5678-4def-abcd-998877665544 \
+subspace memory update 9a8b7c6d-5678-4def-abcd-998877665544 \
   --content "DCUtR hole punching requires both peers connected to same relay first. UPDATED: Also requires identify protocol registered before circuitRelayTransport in libp2p services config — otherwise silent failure." \
   --confidence 0.98 \
   --json
@@ -185,10 +185,10 @@ Querying now returns only the new chunk (HEAD of chain) — the old one is hidde
 
 ## Step 6: Share Portable Skill Memory
 
-Store a skill that's valuable across ALL your projects:
+Store a skill that's valuable across ALL your projects — any agent on the Subspace network sharing your PSK will have access to it:
 
 ```bash
-agent-net memory put \
+subspace memory put \
   --type skill \
   --namespace skill \
   --topic libp2p,nat-traversal,circuit-relay \
@@ -204,7 +204,7 @@ agent-net memory put \
 Don't know the exact topic? Search content directly:
 
 ```bash
-agent-net memory search "identify service" --json
+subspace memory search "identify service" --json
 ```
 
 **Expected output:**
@@ -223,7 +223,7 @@ agent-net memory search "identify service" --json
 ## Step 8: Remove Incorrect Memory
 
 ```bash
-agent-net memory forget aa11bb22-aaaa-4bbb-cccc-dd1122334455 --json
+subspace memory forget aa11bb22-aaaa-4bbb-cccc-dd1122334455 --json
 # Expected: { "forgotten": true, "id": "aa11bb22-..." }
 ```
 
@@ -233,23 +233,23 @@ agent-net memory forget aa11bb22-aaaa-4bbb-cccc-dd1122334455 --json
 
 **Daemon not running:**
 ```bash
-$ agent-net memory put --type skill --topic test --content "hi" --json
+$ subspace memory put --type skill --topic test --content "hi" --json
 # Daemon auto-starts. If it times out:
 { "error": "Daemon failed to start within 10 seconds.", "code": "DAEMON_TIMEOUT" }
-# Fix: agent-net daemon start --foreground   (check for startup errors)
+# Fix: subspace daemon start --foreground   (check for startup errors)
 ```
 
 **PSK too short:**
 ```bash
-$ agent-net network create --psk "weak" --json
+$ subspace network create --psk "weak" --json
 { "error": "PSK too short: 4 chars. Minimum is 16.", "code": "PSK_TOO_SHORT" }
 # Fix: use `openssl rand -hex 32` to generate a proper PSK
 ```
 
 **Chunk not found:**
 ```bash
-$ agent-net memory get nonexistent-id --json
+$ subspace memory get nonexistent-id --json
 { "error": "Chunk not found", "code": "CHUNK_NOT_FOUND" }
 # The chunk may have been tombstoned or not yet replicated from peers.
-# Try: agent-net memory query --network --json  (waits for peer responses)
+# Try: subspace memory query --network --json  (waits for peer responses)
 ```

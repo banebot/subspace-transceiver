@@ -1,12 +1,12 @@
 /**
- * agent-net site — per-agent namespace/site commands
+ * subspace site — per-agent namespace/site commands
  *
  * Usage:
- *   agent-net site whoami              — print your agent identity (peerId)
- *   agent-net site profile             — publish/update your agent profile
- *   agent-net site browse <peerId>     — browse another agent's site
- *   agent-net site collection <coll>   — list your own collection
- *   agent-net site resolve <uri>       — resolve an agent:// URI to a chunk
+ *   subspace site whoami              — print your agent identity (peerId)
+ *   subspace site profile             — publish/update your agent profile
+ *   subspace site browse <peerId>     — browse another agent's site
+ *   subspace site collection <coll>   — list your own collection
+ *   subspace site resolve <uri>       — resolve an agent:// URI to a chunk
  */
 
 import { Command } from 'commander'
@@ -93,7 +93,7 @@ export function buildSiteCommand(): Command {
           slug: 'root',
           confidence: 1.0,
           source: {
-            agentId: process.env.AGENT_NET_AGENT_ID ?? peerId,
+            agentId: process.env.SUBSPACE_AGENT_ID ?? peerId,
             peerId,
             timestamp: Date.now(),
           },

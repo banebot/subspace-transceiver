@@ -22,7 +22,7 @@ CLI_BIN="node $ROOT_DIR/packages/cli/dist/index.js"
 
 ALPHA_PORT=7432
 BETA_PORT=7433
-SESSION="agent-net-demo"
+SESSION="subspace-demo"
 
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if ! command -v tmux &>/dev/null; then
@@ -39,7 +39,7 @@ fi
 # ── Generate shared PSK ───────────────────────────────────────────────────────
 SHARED_PSK=$(openssl rand -hex 32)
 echo ""
-echo "  agent-net · Two-Agent P2P Demo"
+echo "  Subspace Transceiver · Two-Agent P2P Demo"
 echo "  ────────────────────────────────────────────────────"
 echo "  Shared PSK: $SHARED_PSK"
 echo "  Alpha port: $ALPHA_PORT"
@@ -79,10 +79,10 @@ wait_sec() {
   sleep "${1:-2}"
 }
 
-# ── ALPHA pane — data dir at ~/.agent-net (default) ─────────────────────────
-# ── BETA pane  — data dir at ~/.agent-net-beta (via HOME override workaround)─
+# ── ALPHA pane — data dir at ~/.subspace (default) ─────────────────────────
+# ── BETA pane  — data dir at ~/.subspace-beta (via HOME override workaround)─
 
-# We use AGENT_NET_DATA_DIR env override in daemon config, falling back to
+# We use SUBSPACE_DATA_DIR env override in daemon config, falling back to
 # a port-based directory so both daemons don't clash on disk.
 # The daemon reads config from its own data dir, keyed by port.
 
@@ -92,16 +92,16 @@ wait_sec() {
 
 send_alpha "clear && echo ''"
 send_alpha "printf '\033[1;36m  ┌──────────────────────────────────────────────┐\n  │  AGENT ALPHA  ·  claude-3-7-sonnet  · :7432  │\n  │  Working on: auth module refactor           │\n  └──────────────────────────────────────────────┘\033[0m\n'"
-send_alpha "export AGENT_NET_AGENT_ID=claude-3-7-sonnet"
-send_alpha "export AGENT_NET_PORT=$ALPHA_PORT"
+send_alpha "export SUBSPACE_AGENT_ID=claude-3-7-sonnet"
+send_alpha "export SUBSPACE_PORT=$ALPHA_PORT"
 send_alpha "SHARED_PSK='$SHARED_PSK'"
 send_alpha "CLI='$CLI_BIN --port $ALPHA_PORT'"
 send_alpha "echo ''"
 
 send_beta "clear && echo ''"
 send_beta "printf '\033[1;35m  ┌──────────────────────────────────────────────┐\n  │  AGENT BETA   ·  claude-3-5-haiku   · :7433  │\n  │  Working on: API layer / rate limiting      │\n  └──────────────────────────────────────────────┘\033[0m\n'"
-send_beta "export AGENT_NET_AGENT_ID=claude-3-5-haiku"
-send_beta "export AGENT_NET_PORT=$BETA_PORT"
+send_beta "export SUBSPACE_AGENT_ID=claude-3-5-haiku"
+send_beta "export SUBSPACE_PORT=$BETA_PORT"
 send_beta "SHARED_PSK='$SHARED_PSK'"
 send_beta "CLI='$CLI_BIN --port $BETA_PORT'"
 send_beta "echo ''"
