@@ -4,7 +4,7 @@
     "rootDir": "./src",
     "outDir": "./dist",
     "paths": {
-      "@subspace/core": ["../core/src/index.ts"]
+      "@subspace-net/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src/**/*"],

@@ -10,18 +10,18 @@ import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { DaemonError, ErrorCode } from '@subspace/core'
+import { DaemonError, ErrorCode } from '@subspace-net/core'
 import type {
   MemoryChunk,
   MemoryQuery,
   NetworkInfoDTO,
   ContentLink,
-} from '@subspace/core'
+} from '@subspace-net/core'
 import type {
   ChunkStub,
   BrowseResponse,
   PeerIndexEntry,
-} from '@subspace/core'
+} from '@subspace-net/core'
 
 const PID_PATH = join(homedir(), '.subspace', 'daemon.pid')
 
@@ -54,7 +54,7 @@ export async function ensureDaemon(port: number = 7432): Promise<void> {
   } else {
     let npmDaemonPath: string | null = null
     try {
-      npmDaemonPath = fileURLToPath(import.meta.resolve('@subspace/daemon'))
+      npmDaemonPath = fileURLToPath(import.meta.resolve('@subspace-net/daemon'))
     } catch { /* not available */ }
 
     if (npmDaemonPath && existsSync(npmDaemonPath)) {
@@ -282,7 +282,7 @@ export class DaemonClient {
     benchmark: {
       bitsUsed: number
       mineTimeMs: number
-      stamp: import('@subspace/core').HashcashStamp | null
+      stamp: import('@subspace-net/core').HashcashStamp | null
     }
   }> {
     return this.fetch('/security/pow-status')

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @subspace/daemon — entrypoint
+ * @subspace-net/daemon — entrypoint
  *
  * Parse CLI args, load config, load agent identity, start Fastify API,
  * join known networks, start GC scheduler, handle graceful shutdown.
@@ -11,6 +11,7 @@
  */
 
 import { parseArgs } from 'node:util'
+import dns from 'node:dns/promises'
 import {
   joinNetwork,
   leaveNetwork,
@@ -21,7 +22,8 @@ import {
   ReputationStore,
   StampCache,
   type EpochManager,
-} from '@subspace/core'
+  RELAY_ADDRESSES,
+} from '@subspace-net/core'
 import {
   loadConfig,
   saveConfig,
@@ -32,7 +34,7 @@ import {
 import { writePid, clearPid, isDaemonRunning } from './lifecycle.js'
 import { createApi, registerQueryProtocol, type DaemonState } from './api.js'
 import { startGCScheduler } from './gc-scheduler.js'
-import type { IMemoryStore } from '@subspace/core'
+import type { IMemoryStore } from '@subspace-net/core'
 
 // ---------------------------------------------------------------------------
 // Parse args
@@ -45,6 +47,89 @@ const { values: args } = parseArgs({
   },
   strict: false,
 })
+
+// ---------------------------------------------------------------------------
+// Relay health check
+// ---------------------------------------------------------------------------
+
+/**
+ * Probe a relay multiaddr to check if its DNS resolves.
+ * Returns true if the relay is likely reachable, false if DNS is dead.
+ * IP-based addresses are assumed reachable without a lookup.
+ *
+ * Format examples:
+ *   /dnsaddr/bootstrap.libp2p.io/p2p/<PeerId>  → resolve bootstrap.libp2p.io
+ *   /ip4/1.2.3.4/tcp/4001/p2p/<PeerId>         → always considered reachable
+ */
+async function probeRelayDns(multiaddr: string): Promise<boolean> {
+  const dnsaddrMatch = multiaddr.match(/^\/dnsaddr\/([^/]+)/)
+  if (!dnsaddrMatch) {
+    // IP4 or IP6 address — no DNS needed
+    return true
+  }
+  const hostname = dnsaddrMatch[1]
+  try {
+    await dns.resolveTxt(`_dnsaddr.${hostname}`)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Check relay addresses at startup and emit prominent warnings for any that
+ * don't resolve. Called once after config is loaded, before joining networks.
+ */
+async function checkRelayHealth(relayAddresses: string[]): Promise<void> {
+  if (relayAddresses.length === 0) {
+    console.warn(
+      '[subspace] WARNING: No relay addresses configured. NAT traversal (circuit relay v2) ' +
+      'is disabled. Agents behind NAT will only be reachable via mDNS on the same LAN. ' +
+      'Add relay addresses to ~/.subspace/config.yaml under `relayAddresses:` to enable ' +
+      'global connectivity. See https://github.com/libp2p/js-libp2p/tree/main/packages/relay-server'
+    )
+    return
+  }
+
+  // Deduplicate by hostname — avoid redundant DNS probes for the same host
+  const hostsSeen = new Set<string>()
+  const uniqueAddresses = relayAddresses.filter(addr => {
+    const m = addr.match(/^\/dnsaddr\/([^/]+)/)
+    if (!m) return true          // IP-based — always include
+    if (hostsSeen.has(m[1])) return false
+    hostsSeen.add(m[1])
+    return true
+  })
+
+  const results = await Promise.all(
+    uniqueAddresses.map(addr => probeRelayDns(addr).then(ok => ({ addr, ok })))
+  )
+
+  const dead = results.filter(r => !r.ok)
+  const alive = results.filter(r => r.ok)
+
+  if (dead.length > 0) {
+    console.warn(
+      `[subspace] WARNING: ${dead.length} relay address(es) failed DNS resolution — ` +
+      'NAT traversal will be degraded:\n' +
+      dead.map(r => `  ${r.addr}`).join('\n')
+    )
+  }
+
+  if (alive.length === 0) {
+    console.warn(
+      '[subspace] CRITICAL: ALL relay addresses are unreachable! ' +
+      'Circuit relay v2 NAT traversal will not work. ' +
+      'Agents behind NAT cannot connect to each other. ' +
+      'Configure a reachable relay via `relayAddresses` in ~/.subspace/config.yaml.'
+    )
+  } else {
+    console.log(
+      `[subspace] Relay health: ${alive.length}/${uniqueAddresses.length} address(es) reachable.` +
+      (dead.length > 0 ? ` (${dead.length} dead — see warnings above)` : '')
+    )
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Main
@@ -66,6 +151,13 @@ async function main() {
     console.error('[subspace] Failed to load config:', err)
     process.exit(1)
   }
+
+  // ---------------------------------------------------------------------------
+  // Relay health check — warn early if relay DNS is dead or unconfigured
+  // ---------------------------------------------------------------------------
+  const effectiveRelayAddresses =
+    config.relayAddresses.length > 0 ? config.relayAddresses : RELAY_ADDRESSES
+  await checkRelayHealth(effectiveRelayAddresses)
 
   // ---------------------------------------------------------------------------
   // Load (or generate) the persistent agent identity
@@ -125,6 +217,8 @@ async function main() {
         displayName: config.displayName,
         minConnections: config.security.minPeerConnections,
         trustedBootstrapPeers: config.security.trustedBootstrapPeers,
+        // Pass effective relay addresses (config override or built-in fallback)
+        relayAddresses: effectiveRelayAddresses,
         subscribedTopics: config.subscriptions.topics,
         subscribedPeers: config.subscriptions.peers,
         // Proof-of-work

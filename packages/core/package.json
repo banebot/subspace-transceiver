@@ -1,5 +1,5 @@
 {
-  "name": "@subspace/core",
+  "name": "@subspace-net/core",
   "version": "0.1.0",
   "type": "module",
   "description": "Core P2P networking and memory engine for Subspace Transceiver (libp2p + OrbitDB)",

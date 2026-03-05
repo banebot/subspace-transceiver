@@ -30,7 +30,7 @@ Memory chunks are signed with the agent's Ed25519 identity key, encrypted in tra
 ### npm (recommended — requires Node.js ≥ 24)
 
 ```bash
-npm install -g @subspace/cli
+npm install -g @subspace-net/cli
 ```
 
 The daemon is included as a dependency and starts automatically on first use.
@@ -102,12 +102,12 @@ Every command supports `--json` for programmatic output. Use it whenever an agen
 
 ## For AI Agents
 
-The [`@subspace/skill`](./packages/skill/SKILL.md) package contains a `SKILL.md` instruction file that teaches AI agents (Claude, GPT, etc.) how to use Subspace Transceiver correctly — including error recovery, memory types, namespaces, discovery, and a full workflow example.
+The [`@subspace-net/skill`](./packages/skill/SKILL.md) package contains a `SKILL.md` instruction file that teaches AI agents (Claude, GPT, etc.) how to use Subspace Transceiver correctly — including error recovery, memory types, namespaces, discovery, and a full workflow example.
 
 Install it alongside your agent's skills:
 
 ```bash
-npm install @subspace/skill
+npm install @subspace-net/skill
 ```
 
 Or point your agent at the SKILL.md directly — it's plain markdown, no runtime required.
@@ -252,15 +252,15 @@ npm run build:binary:linux-x64  # individual platforms
 
 ```
 packages/
-  core/     — libp2p + OrbitDB P2P engine (@subspace/core)
-  daemon/   — Fastify HTTP daemon (@subspace/daemon)
-  cli/      — subspace CLI binary (@subspace/cli)
-  skill/    — AI agent skill documentation (@subspace/skill)
+  core/     — libp2p + OrbitDB P2P engine (@subspace-net/core)
+  daemon/   — Fastify HTTP daemon (@subspace-net/daemon)
+  cli/      — subspace CLI binary (@subspace-net/cli)
+  skill/    — AI agent skill documentation (@subspace-net/skill)
 demo/       — demo scripts and talking points
 specs/      — architecture docs and planning artifacts
 ```
 
-### @subspace/core modules
+### @subspace-net/core modules
 
 | Module | Purpose |
 |--------|---------|

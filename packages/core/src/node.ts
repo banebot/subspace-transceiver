@@ -78,6 +78,12 @@ export interface CreateNodeOptions {
    * Pinned peers are harder to eclipse away from.
    */
   trustedBootstrapPeers?: string[]
+  /**
+   * Circuit relay v2 multiaddrs for NAT traversal.
+   * When not provided (or empty), falls back to the built-in RELAY_ADDRESSES.
+   * Override from ~/.subspace/config.yaml to point at your own relay server.
+   */
+  relayAddresses?: string[]
 }
 
 /**
@@ -98,11 +104,16 @@ export async function createLibp2pNode(
     minConnections = 5,
     maxConnections = 50,
     trustedBootstrapPeers = [],
+    relayAddresses,
   } = options
+
+  // Use caller-supplied relay addresses if provided (even if empty — allows disabling relay).
+  // Fall back to the built-in RELAY_ADDRESSES when not specified.
+  const effectiveRelayAddresses = relayAddresses !== undefined ? relayAddresses : RELAY_ADDRESSES
 
   const bootstrapList = [
     ...BOOTSTRAP_ADDRESSES,
-    ...RELAY_ADDRESSES,
+    ...effectiveRelayAddresses,
     ...trustedBootstrapPeers,
   ]
 

@@ -66,7 +66,7 @@ import {
   StampCache,
   mineStamp,
   verifyStamp,
-} from '@subspace/core'
+} from '@subspace-net/core'
 import type { PrivateKey } from '@libp2p/interface'
 import { pipe } from 'it-pipe'
 import * as lp from 'it-length-prefixed'
@@ -287,6 +287,9 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
         displayName: state.config.displayName,
         minConnections: state.config.security.minPeerConnections,
         trustedBootstrapPeers: state.config.security.trustedBootstrapPeers,
+        relayAddresses: state.config.relayAddresses.length > 0
+          ? state.config.relayAddresses
+          : undefined, // undefined → built-in RELAY_ADDRESSES fallback in node.ts
         subscribedTopics: state.config.subscriptions.topics,
         subscribedPeers: state.config.subscriptions.peers,
         // Proof-of-work
@@ -590,7 +593,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     delete (queryOp as Record<string, unknown>).freetext
 
     // Mine a query stamp (16 bits, cheap — cached per window)
-    let queryPow: import('@subspace/core').HashcashStamp | undefined
+    let queryPow: import('@subspace-net/core').HashcashStamp | undefined
     try {
       const localPeerIdForQuery = state.getPeerId()
       const { powBitsForRequests, powWindowMs } = state.config.security
@@ -971,7 +974,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
 
     // Benchmark: mine a fresh 16-bit stamp (cheap) to report current mining speed
     const benchStart = Date.now()
-    let benchStamp: import('@subspace/core').HashcashStamp | null = null
+    let benchStamp: import('@subspace-net/core').HashcashStamp | null = null
     try {
       benchStamp = await mineStamp(localPeerId, 'bench', powBitsForRequests, powWindowMs)
     } catch { /* ignore */ }

@@ -13,8 +13,8 @@
  * Also runs immediately on startup to prune stale chunks from previous sessions (AC 17).
  */
 
-import { runGC, type IMemoryStore } from '@subspace/core'
-import type { EpochManager } from '@subspace/core'
+import { runGC, type IMemoryStore } from '@subspace-net/core'
+import type { EpochManager } from '@subspace-net/core'
 
 /**
  * Start the GC + epoch rotation scheduler.

@@ -121,6 +121,8 @@ export async function joinNetwork(
     minConnections?: number
     maxConnections?: number
     trustedBootstrapPeers?: string[]
+    /** Circuit relay v2 multiaddrs. Overrides built-in RELAY_ADDRESSES when provided. */
+    relayAddresses?: string[]
     subscribedTopics?: string[]
     subscribedPeers?: string[]
     // Proof-of-work
@@ -147,6 +149,7 @@ export async function joinNetwork(
       minConnections: options.minConnections,
       maxConnections: options.maxConnections,
       trustedBootstrapPeers: options.trustedBootstrapPeers,
+      relayAddresses: options.relayAddresses,
     })
 
     // Create a single Helia + OrbitDB context shared by both namespaces.

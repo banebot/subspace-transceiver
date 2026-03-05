@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { Command } from 'commander'
 import { DaemonClient } from '../client.js'
 import { print, printError, printSuccess } from '../output.js'
-import type { MemoryType, MemoryNamespace, ContentFormat, ContentLink } from '@subspace/core'
+import type { MemoryType, MemoryNamespace, ContentFormat, ContentLink } from '@subspace-net/core'
 
 function getOpts(cmd: Command): { json: boolean; port: number } {
   const parent = cmd.parent?.parent ?? cmd.parent ?? cmd

@@ -1,5 +1,5 @@
 {
-  "name": "@subspace/skill",
+  "name": "@subspace-net/skill",
   "version": "0.1.0",
   "description": "Subspace Transceiver skill documentation — teaches AI agents how to use the subspace CLI",
   "license": "MIT",

@@ -1,5 +1,5 @@
 {
-  "name": "@subspace/cli",
+  "name": "@subspace-net/cli",
   "version": "0.1.0",
   "type": "module",
   "description": "Decentralized agent memory — store, query, and share memory across AI agents over a P2P network",
@@ -29,8 +29,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@subspace/core": "*",
-    "@subspace/daemon": "*",
+    "@subspace-net/core": "*",
+    "@subspace-net/daemon": "*",
     "commander": "14.0.3"
   },
   "devDependencies": {

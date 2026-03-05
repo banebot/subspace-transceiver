@@ -1,5 +1,5 @@
 /**
- * @subspace/core — public API
+ * @subspace-net/core — public API
  *
  * Exports all public types, error classes, and functions.
  * OrbitDB internals are NOT exported — use IMemoryStore interface only.

@@ -1,5 +1,5 @@
 {
-  "name": "@subspace/daemon",
+  "name": "@subspace-net/daemon",
   "version": "0.1.0",
   "type": "module",
   "description": "Background daemon process for Subspace Transceiver — Fastify HTTP API + libp2p node",
@@ -28,7 +28,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@subspace/core": "*",
+    "@subspace-net/core": "*",
     "fastify": "5.7.4",
     "yaml": "2.8.2"
   },

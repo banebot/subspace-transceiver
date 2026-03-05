@@ -168,6 +168,21 @@ export interface DaemonConfig {
    * tombstones that would otherwise accumulate forever.
    */
   epochs: EpochConfig
+  /**
+   * Circuit relay v2 multiaddrs for NAT traversal.
+   *
+   * When empty (the default), the built-in RELAY_ADDRESSES from bootstrap.ts are used.
+   * Set this to override — e.g. to point at your own relay server for reliable beta
+   * connectivity, or to disable relay entirely (set to []).
+   *
+   * Example (run your own relay with @libp2p/relay-server on a VPS):
+   *   relayAddresses:
+   *     - /ip4/1.2.3.4/tcp/4001/p2p/QmYourRelayPeerId
+   *
+   * See https://github.com/libp2p/js-libp2p/tree/main/packages/relay-server for
+   * instructions on running a relay node.
+   */
+  relayAddresses: string[]
 }
 
 export const DEFAULT_SECURITY: SecurityConfig = {
@@ -197,6 +212,7 @@ const DEFAULTS: DaemonConfig = {
   security: DEFAULT_SECURITY,
   subscriptions: { topics: [], peers: [] },
   epochs: DEFAULT_EPOCH_CONFIG,
+  relayAddresses: [],
 }
 
 /**
@@ -225,6 +241,7 @@ export async function loadConfig(): Promise<DaemonConfig> {
     security: { ...DEFAULT_SECURITY, ...(fileConfig.security ?? {}) },
     subscriptions: { ...DEFAULTS.subscriptions, ...(fileConfig.subscriptions ?? {}) },
     epochs: { ...DEFAULT_EPOCH_CONFIG, ...(fileConfig.epochs ?? {}) },
+    relayAddresses: fileConfig.relayAddresses ?? DEFAULTS.relayAddresses,
   }
 
   if (!config.agentId) {

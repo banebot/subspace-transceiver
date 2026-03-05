@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @subspace/cli — Subspace Transceiver command-line interface
+ * @subspace-net/cli — Subspace Transceiver command-line interface
  *
  * Usage: subspace [options] <command>
  *
