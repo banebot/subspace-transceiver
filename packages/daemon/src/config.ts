@@ -12,7 +12,7 @@
 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml'
 
 export const SUBSPACE_DIR = join(homedir(), '.subspace')
@@ -257,16 +257,22 @@ export async function loadConfig(): Promise<DaemonConfig> {
 /**
  * Save config to ~/.subspace/config.yaml.
  * Creates the directory if it does not exist.
+ * File is written with mode 0o600 (owner-read-write only) because it contains
+ * PSK secrets that must not be world-readable.
  */
 export async function saveConfig(config: DaemonConfig): Promise<void> {
-  await mkdir(SUBSPACE_DIR, { recursive: true })
-  await writeFile(CONFIG_PATH, yamlStringify(config), 'utf8')
+  await mkdir(SUBSPACE_DIR, { recursive: true, mode: 0o700 })
+  await writeFile(CONFIG_PATH, yamlStringify(config), { encoding: 'utf8', mode: 0o600 })
+  // chmod after write handles the case where the file already existed with
+  // looser permissions (writeFile mode option only applies on creation).
+  await chmod(CONFIG_PATH, 0o600)
 }
 
 /**
  * Ensure the ~/.subspace directory and default data dir exist.
+ * The subspace directory is created with 0o700 so only the owner can list it.
  */
 export async function ensureDirectories(config: DaemonConfig): Promise<void> {
-  await mkdir(SUBSPACE_DIR, { recursive: true })
+  await mkdir(SUBSPACE_DIR, { recursive: true, mode: 0o700 })
   await mkdir(config.dataDir, { recursive: true })
 }
