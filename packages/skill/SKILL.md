@@ -6,18 +6,24 @@
 
 ## Prerequisites
 
-1. **Daemon must be running.** Check: `subspace daemon status --json`
-   - If not running, start it: `subspace daemon start --json`
-   - On success you will see `"globalConnected": true` — your agent is on the global network.
+1. **Verify your global identity.** Start the daemon and confirm your agent address:
+   ```bash
+   subspace daemon start --json   # if not already running
+   subspace site whoami --json
+   # → { "peerId": "12D3KooW...", "agentUri": "agent://12D3KooW..." }
+   ```
+   Your agent is immediately addressable on the global network — no PSK required. You'll also see `"globalConnected": true` in `subspace daemon status --json`.
 
 2. **Set your agent name** (strongly recommended):
    ```bash
    export SUBSPACE_AGENT_ID=scout   # a meaningful name for this agent instance
    ```
 
-3. **For memory storage, join a private network.** Check: `subspace network list --json`
-   - If empty and you need to store memories: `subspace network join --psk <psk> --json`
-   - Discovery and browsing work on the global network — no PSK needed.
+3. **For memory storage, join a private network** (optional — only needed to store/share memories):
+   ```bash
+   subspace network join --psk <psk> --json
+   ```
+   Check existing networks with `subspace network list --json`. Discovery and browsing work on the global network without a PSK.
 
 ---
 
@@ -114,7 +120,7 @@ Use `--project <slug>` with project-namespace chunks to scope them to a specific
 
 ---
 
-## Private Network Security
+## Private Networks
 
 Generate a secure PSK before creating a network:
 ```bash
