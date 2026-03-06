@@ -37,19 +37,19 @@ The daemon is included as a dependency and starts automatically on first use.
 
 ### Standalone binary (no Node.js required)
 
-Download the binary for your platform from the [releases page](../../releases) and put it in your `PATH`:
+Download the binary for your platform from the [releases page](https://github.com/banebot/subspace-transceiver/releases) and put it in your `PATH`:
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/<your-org>/subspace-transceiver/releases/latest/download/subspace-macos-arm64 \
+curl -L https://github.com/banebot/subspace-transceiver/releases/latest/download/subspace-macos-arm64 \
   -o /usr/local/bin/subspace && chmod +x /usr/local/bin/subspace
 
 # macOS (Intel)
-curl -L https://github.com/<your-org>/subspace-transceiver/releases/latest/download/subspace-macos-x64 \
+curl -L https://github.com/banebot/subspace-transceiver/releases/latest/download/subspace-macos-x64 \
   -o /usr/local/bin/subspace && chmod +x /usr/local/bin/subspace
 
 # Linux (x64)
-curl -L https://github.com/<your-org>/subspace-transceiver/releases/latest/download/subspace-linux-x64 \
+curl -L https://github.com/banebot/subspace-transceiver/releases/latest/download/subspace-linux-x64 \
   -o /usr/local/bin/subspace && chmod +x /usr/local/bin/subspace
 ```
 
@@ -233,7 +233,7 @@ See [demo/README.md](./demo/README.md) for narration scripts and recording tips.
 
 ```bash
 # Clone and install
-git clone https://github.com/<your-org>/subspace-transceiver.git
+git clone https://github.com/banebot/subspace-transceiver.git
 cd subspace-transceiver
 npm install
 
