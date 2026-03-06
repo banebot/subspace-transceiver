@@ -29,8 +29,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@subspace-net/core": "*",
-    "@subspace-net/daemon": "*",
+    "@subspace-net/core": "0.1.0",
+    "@subspace-net/daemon": "0.1.0",
     "commander": "14.0.3"
   },
   "devDependencies": {

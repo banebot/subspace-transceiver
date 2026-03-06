@@ -28,7 +28,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@subspace-net/core": "*",
+    "@subspace-net/core": "0.1.0",
     "fastify": "5.7.4",
     "yaml": "2.8.2"
   },
