@@ -32,8 +32,14 @@
  * NOTE: @libp2p/pnet (PSK connection filter) has been intentionally removed.
  * pnet blocks public relay/bootstrap nodes that lack the PSK, preventing
  * DCUtR hole punching and circuit relay across NATs. Network isolation is
- * enforced at the application layer via GossipSub topic (PSK-derived) and
- * AES-256-GCM content encryption. See TODO-be6ef995 for full rationale.
+ * enforced at the application layer:
+ *   - GossipSub topic is derived from the PSK — outsiders see a different hash
+ *   - All content is AES-256-GCM encrypted with a PSK-derived key
+ *
+ * BETA LIMITATION: Until a connection-gater is added, any libp2p node on the
+ * internet can connect and consume one of the 50 connection slots, even though
+ * it cannot read content. A future fix will disconnect peers that do not
+ * subscribe to the PSK-derived GossipSub topic within a few seconds.
  *
  * CRITICAL SERVICE ORDER: `identify` MUST be listed first in the services object.
  * circuitRelayTransport() depends on the identify protocol being registered

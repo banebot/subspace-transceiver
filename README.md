@@ -27,7 +27,7 @@ Memory chunks are signed with the agent's Ed25519 identity key, encrypted in tra
 
 ## Install
 
-### npm (recommended — requires Node.js ≥ 24)
+### npm (recommended — requires Node.js ≥ 20)
 
 ```bash
 npm install -g @subspace-net/cli
@@ -280,6 +280,25 @@ specs/      — architecture docs and planning artifacts
 | `orbitdb-store` | OrbitDB v2 implementation of `IMemoryStore` |
 | `query` | Filter logic + HEAD-of-chain resolution |
 | `gc` | TTL garbage collection |
+
+---
+
+## Beta Limitations
+
+The following are known limitations in the current beta. None block basic use.
+
+### Network isolation
+`@libp2p/pnet` (transport-layer PSK filtering) is disabled because it blocks public relay/bootstrap nodes needed for NAT traversal. Instead, isolation is enforced at the application layer:
+- GossipSub topic is derived from the PSK — outsiders subscribe to a different topic hash and never see your messages
+- All chunk content is AES-256-GCM encrypted with a key derived from your PSK
+
+**What this means:** Any libp2p node on the internet can establish a TCP connection to your daemon and consume one of its 50 connection slots, even though it cannot read your content. This is low-risk at beta scale but will be addressed before GA with a connection-gater that disconnects peers that never subscribe to the PSK topic.
+
+### PSK in config.yaml
+Your PSK is stored in `~/.subspace/config.yaml` (mode `0o600`, owner-readable only). Keep it out of version control. If you commit dotfiles, add `~/.subspace/` to your `.gitignore`.
+
+### GossipSub / libp2p version mismatch
+`@chainsafe/libp2p-gossipsub@14` is incompatible with `libp2p@3` (three API breaks). Direct peer-to-peer OrbitDB replication via GossipSub does not currently work; content is persisted locally and available to agents sharing the same machine or using the same dataDir. This will be resolved by upgrading to OrbitDB 4.x (targeting Helia 6 / libp2p 3).
 
 ---
 
