@@ -144,8 +144,8 @@ describe('OrbitDB replication integration', { timeout: 60_000 }, () => {
       keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32))),
     ])
     ;[nodeA, nodeB] = await Promise.all([
-      createLibp2pNode(networkKeys, keyA, { port: 0 }),
-      createLibp2pNode(networkKeys, keyB, { port: 0 }),
+      createLibp2pNode(keyA, { port: 0 }),
+      createLibp2pNode(keyB, { port: 0 }),
     ])
 
     ;[ctxA, ctxB] = await Promise.all([

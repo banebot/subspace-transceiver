@@ -116,7 +116,19 @@ export class DaemonClient {
   // ---------------------------------------------------------------------------
   // Health
   // ---------------------------------------------------------------------------
-  async health(): Promise<{ status: string; peerId: string; networks: NetworkInfoDTO[]; uptime: number; version: string }> {
+  async health(): Promise<{
+    status: string
+    peerId: string
+    agentUri: string
+    /** True once the agent has at least one peer on the global Subspace network */
+    globalConnected: boolean
+    /** Number of peers connected on the global (non-PSK) network */
+    globalPeers: number
+    /** Private PSK network sessions */
+    networks: NetworkInfoDTO[]
+    uptime: number
+    version: string
+  }> {
     return this.fetch('/health')
   }
 

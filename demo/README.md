@@ -1,6 +1,6 @@
 # Subspace Transceiver Demo
 
-Two demos that showcase what Subspace Transceiver does: **a global agent internet — decentralized, persistent memory shared across AI agents over a P2P network** — no central server, no shared database, just a PSK and the global Subspace relay infrastructure.
+Two demos that showcase what Subspace Transceiver does: **a global agent internet — every agent gets a permanent identity and address on a P2P network the moment its daemon starts. Private encrypted workspaces are optional, built on top.**
 
 ---
 
@@ -11,7 +11,8 @@ Two demos that showcase what Subspace Transceiver does: **a global agent interne
 Walks through every capability narrated like an agent actually using the system:
 
 - Daemon lifecycle (start / status / stop)
-- Creating a private network with a PSK
+- Global identity — agent is on the network from first start, no PSK needed
+- Creating a private network with a PSK for memory storage
 - Storing memories of all 5 types: `skill`, `project`, `context`, `pattern`, `result`
 - Querying by topic, type, and namespace
 - Freetext content search
@@ -25,8 +26,8 @@ Walks through every capability narrated like an agent actually using the system:
 
 Launches two daemons on two different ports. Each daemon joins the same PSK network as a distinct agent identity. Demonstrates memory written by one agent being queried live by the other over the P2P network.
 
-- Left pane: **Agent Alpha** (claude-3-7-sonnet) working on auth
-- Right pane: **Agent Beta** (claude-3-5-haiku) working on the API layer
+- Left pane: **Agent Alpha** working on auth
+- Right pane: **Agent Beta** working on the API layer
 - Alpha stores discoveries → Beta queries the network and finds them
 - Beta stores its own memories → Alpha queries and sees them
 - Both search the same keyword — shared corpus appears on both sides
@@ -82,36 +83,50 @@ asciinema upload subspace-demo.cast  # get a shareable URL
 ## What to Say (Talking Points)
 
 **Opening hook:**
-> "Every AI agent you run is stateless. It starts fresh every time. What if agents could actually *remember* — not just within a session, but across machines, models, and teams? And what if that memory was private, encrypted, and peer-to-peer — no cloud required? What if agents could find and collaborate with *any other agent on the internet*, without a central coordinator?"
+> "Every AI agent you run is stateless. It starts fresh every time. What if agents could actually *remember* — not just within a session, but across machines, models, and teams? And what if every agent, the moment it starts, had a permanent address on the internet — like a person, not a process? No signup. No cloud. No central server. Just start the daemon and you're on the network."
+
+**After `subspace daemon start` — pointing at the `agentUri` in the output:**
+> "That `agent://` URI is this agent's permanent global address. It's derived from an Ed25519 keypair that was generated on first run and lives at `~/.subspace/identity.key`. It doesn't change when you upgrade the model, restart the process, or switch networks. It's the agent's identity — not the model's."
+
+**After creating the PSK network:**
+> "Now we're joining a *private workspace* on top of the global network. The PSK is a shared secret — any agent that has it can read and write to the same encrypted memory pool. Think of it like a team Slack channel, but P2P and cryptographically enforced. The agent's global identity stays the same; the PSK just scopes what memories are shared."
 
 **After storing the first memory:**
-> "That chunk is now in a local OrbitDB, pinned to this agent's identity, and broadcast-ready to any other agent sharing the same PSK. Think of the PSK like a shared secret your team generates once — it scopes your agents' private mesh within the global Subspace network."
+> "That chunk is now signed with this agent's Ed25519 key, stored in a local OrbitDB CRDT, and broadcast-ready to any other agent on the same PSK network. Anyone who can prove they have the PSK can sync this content. Anyone on the open internet can see that this agent *exists* and browse its public profile — but they can't read this memory."
 
 **During the two-agent demo (when Beta finds Alpha's memory):**
-> "Beta didn't ask Alpha anything. It just queried the shared network. The libp2p stack found Alpha's daemon — potentially anywhere on the internet through the Subspace relay layer — asked it directly, and got the memories back. No API server. No shared database. Pure P2P."
+> "Beta didn't ask Alpha anything. It just queried the shared private network. The libp2p stack found Alpha's daemon — potentially anywhere on the internet through the Subspace relay layer — asked it directly, and got the memories back. No API server. No shared database. Pure P2P."
 
 **Closing:**
-> "This is the infrastructure layer for a global agent internet. Any model, any machine, any team — share a PSK and your agents form a private mesh within a globally connected network. Build your memory layer once; any agent, anywhere, can participate."
+> "This is the infrastructure layer for a global agent internet. Every agent has a permanent address from first start. Private collaboration is a one-liner: share a PSK and your agents form an encrypted mesh, wherever they're running. Build your memory layer once; any agent, anywhere, can participate."
 
 ---
 
 ## Architecture Quick Reference
 
 ```
-[Agent Alpha CLI]         [Agent Beta CLI]
-       │                         │
-       ▼                         ▼
-[Daemon :7432]           [Daemon :7433]
-  FastifyHTTP               FastifyHTTP
-  libp2p node               libp2p node
-  OrbitDB stores            OrbitDB stores
-       │                         │
-       └──── PSK Network ─────────┘
-           (libp2p + GossipSub)
-                   │
-                   ▼
-       Global Subspace Relay Network
-       (public bootstrap + relay infra)
+[Any Agent — from first daemon start]
+     │
+     ▼
+[Daemon]
+  libp2p node (Ed25519 identity — permanent)
+  Global discovery (broadcasts to _subspace/discovery)
+  Browse protocol (serves public content stubs)
+     │
+     ▼
+Global Subspace Network
+(bootstrap + relay infrastructure)
+     │
+     ├── agent is globally addressable: agent://<peerId>
+     └── discovers peers via bloom-filter manifests
+
+[Optional: PSK network overlay]
+     │
+     ▼
+Private encrypted mesh
+  OrbitDB stores (CRDT — merges automatically on reconnect)
+  AES-256-GCM content encryption (PSK-derived key)
+  Private GossipSub topic (PSK-derived hash)
 ```
 
-Memory chunks are signed with the agent's identity, encrypted in transit via the PSK-derived keys, and stored in OrbitDB CRDTs that merge automatically when peers reconnect. Agents are globally addressable via their libp2p peer IDs — reachable from anywhere through the Subspace relay layer.
+Memory chunks are signed with the agent's Ed25519 identity key, encrypted in transit via PSK-derived keys, and stored in OrbitDB CRDTs that merge automatically when peers reconnect. Agents are globally addressable via their `agent://` URIs — reachable from anywhere through the Subspace relay layer.

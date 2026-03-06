@@ -16,6 +16,9 @@ import {
   joinNetwork,
   leaveNetwork,
   type NetworkSession,
+  joinGlobalNetwork,
+  leaveGlobalNetwork,
+  type GlobalSession,
   deriveNetworkId,
   loadOrCreateIdentity,
   RateLimiter,
@@ -173,9 +176,48 @@ async function main() {
 
   const sessions = new Map<string, NetworkSession>()
 
+  // ---------------------------------------------------------------------------
+  // Start the always-on global network session
+  // ---------------------------------------------------------------------------
+  // The global session connects the agent to the open Subspace internet before
+  // any PSK networks are joined. It provides:
+  //   - A globally routable identity via circuit relay (agent://<peerId>)
+  //   - Public discovery manifest broadcasting on the well-known GossipSub topic
+  //   - Browse protocol support for any peer on the internet
+  //   - No PSK required — global presence is automatic
+  //
+  // PSK networks (joinNetwork calls below) are overlays on top of this.
+  let globalSession: GlobalSession | null = null
+  try {
+    globalSession = await joinGlobalNetwork(identity.privateKey, {
+      displayName: config.displayName,
+      minConnections: config.security.minPeerConnections,
+      trustedBootstrapPeers: config.security.trustedBootstrapPeers,
+      relayAddresses: effectiveRelayAddresses,
+      subscribedTopics: config.subscriptions.topics,
+      subscribedPeers: config.subscriptions.peers,
+      stampCache: new StampCache(),  // separate stamp cache for global session manifests
+      powBitsForRequests: config.security.powBitsForRequests,
+      powWindowMs: config.security.powWindowMs,
+      requirePoW: config.security.requirePoW,
+    })
+    console.log(
+      `[subspace] Connected to global Subspace network. ` +
+      `Your agent is globally addressable at: agent://${identity.peerId}`
+    )
+  } catch (err) {
+    console.warn(
+      '[subspace] WARNING: Could not establish global network connection. ' +
+      'Agent will not be globally addressable until connectivity is restored. ' +
+      'PSK networks can still function locally. Error:', err
+    )
+    globalSession = null
+  }
+
   // State shared with the API
   const state: DaemonState = {
     config,
+    globalSession,
     sessions,
     getPeerId: () => identity.peerId,
     startedAt: Date.now(),
@@ -288,11 +330,18 @@ async function main() {
     clearInterval(gcHandle)
     clearInterval(diversityHandle)
 
-    // Leave all networks
+    // Leave all PSK networks first
     for (const session of sessions.values()) {
       await leaveNetwork(session).catch(e => console.warn('[subspace] Leave error:', e))
     }
     sessions.clear()
+
+    // Leave the global network last (it was started first)
+    if (state.globalSession) {
+      await leaveGlobalNetwork(state.globalSession).catch(
+        e => console.warn('[subspace] Global network leave error:', e)
+      )
+    }
 
     // Stop Fastify
     await app.close().catch(e => console.warn('[subspace] Fastify close error:', e))

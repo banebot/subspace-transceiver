@@ -61,7 +61,6 @@ import { bootstrap } from '@libp2p/bootstrap'
 import { ping } from '@libp2p/ping'
 import { peerIdFromPrivateKey } from '@libp2p/peer-id'
 import type { PrivateKey } from '@libp2p/interface'
-import { type NetworkKeys } from './crypto.js'
 import { BOOTSTRAP_ADDRESSES, RELAY_ADDRESSES } from './bootstrap.js'
 
 export interface CreateNodeOptions {
@@ -93,15 +92,22 @@ export interface CreateNodeOptions {
 }
 
 /**
- * Create and start a libp2p node configured for the given network.
+ * Create and start a libp2p node for the given agent.
  *
- * @param networkKeys     Derived from the PSK — used for the PSK connection filter only.
+ * The node is PSK-agnostic — it connects to the global bootstrap/relay
+ * infrastructure regardless of whether a PSK network is active. PSK isolation
+ * is enforced at the application layer (GossipSub topic derivation + AES-256-GCM
+ * content encryption) not at the transport layer.
+ *
+ * This function is used for both:
+ *   - The always-on global session (no PSK, just identity + connectivity)
+ *   - Per-PSK network sessions (OrbitDB + encrypted content sharing on top)
+ *
  * @param agentPrivateKey Persistent per-agent Ed25519 key from identity.ts.
  *                        Determines the node's PeerId (unique per agent, stable across restarts).
  * @param options         Optional node configuration.
  */
 export async function createLibp2pNode(
-  networkKeys: NetworkKeys,
   agentPrivateKey: PrivateKey,
   options: CreateNodeOptions = {}
 ): Promise<Libp2p> {

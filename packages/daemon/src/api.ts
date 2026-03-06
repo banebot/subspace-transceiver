@@ -38,6 +38,7 @@ import {
   deriveNetworkId,
   type NetworkSession,
   type NetworkInfoDTO,
+  type GlobalSession,
   validatePSK,
   validateChunk,
   resolveHeads,
@@ -75,6 +76,14 @@ const VERSION = '0.2.0'
 
 export interface DaemonState {
   config: DaemonConfig
+  /**
+   * Always-on global session — the agent's presence on the open Subspace
+   * internet. Started at daemon boot, before any PSK networks are joined.
+   * Provides global addressability, public peer discovery, and browse protocol
+   * support. Null only if global network startup failed (rare, logged as warning).
+   */
+  globalSession: GlobalSession | null
+  /** PSK-scoped private network sessions — encrypted memory sharing */
   sessions: Map<string, NetworkSession>
   getPeerId: () => string
   startedAt: number
@@ -244,9 +253,16 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // ---------------------------------------------------------------------------
   app.get('/health', async (_req, reply) => {
     const networks = [...state.sessions.values()].map(sessionToDTO)
+    const globalPeers = state.globalSession?.node.getPeers().length ?? 0
     return reply.send({
       status: 'ok',
       peerId: state.getPeerId(),
+      agentUri: `agent://${state.getPeerId()}`,
+      // Global connectivity — true once the agent has peers on the open network.
+      // Independent of PSK networks. False only if bootstrap/relay is unreachable.
+      globalConnected: globalPeers > 0,
+      globalPeers,
+      // Private PSK networks (encrypted memory sharing)
       networks,
       uptime: Math.floor((Date.now() - state.startedAt) / 1000),
       version: VERSION,
@@ -350,8 +366,23 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     }
 
     if (!session) {
+      // Distinguish between "no daemon connectivity at all" and "connected globally
+      // but no private workspace joined yet" — the latter is the expected state for
+      // new agents who haven't yet joined a PSK network.
+      const isGloballyConnected = state.globalSession !== null
+      if (isGloballyConnected) {
+        return reply.status(400).send({
+          error:
+            'No private network joined. Memory storage requires a private workspace. ' +
+            'Your agent is already connected to the global Subspace network ' +
+            `(agent://${state.getPeerId()}) and is globally addressable, ` +
+            'but content sharing requires a private network. ' +
+            'Join one with: subspace network join --psk <key>',
+          code: ErrorCode.NETWORK_NOT_FOUND,
+        })
+      }
       return reply.status(400).send({
-        error: 'No active network. Join a network first with POST /networks.',
+        error: 'No active network. Join a network first with: subspace network join --psk <key>',
         code: ErrorCode.NETWORK_NOT_FOUND,
       })
     }
@@ -844,9 +875,23 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // GET /discovery/peers — known peers with topic summaries
   // ---------------------------------------------------------------------------
   app.get('/discovery/peers', async (_req, reply) => {
-    const peers = []
-    for (const session of state.sessions.values()) {
-      for (const entry of session.discovery.getKnownPeers()) {
+    const seen = new Set<string>()
+    const peers: Array<{
+      peerId: string
+      displayName?: string
+      collections: string[]
+      chunkCount: number
+      updatedAt: number
+      lastSeen: number
+      agentUri: string
+    }> = []
+
+    // Helper: add entries from any discovery manager, deduplicating by peerId.
+    // Global session and PSK sessions may overlap (same peer seen in both).
+    const addEntries = (discovery: import('@subspace-net/core').DiscoveryManager) => {
+      for (const entry of discovery.getKnownPeers()) {
+        if (seen.has(entry.peerId)) continue
+        seen.add(entry.peerId)
         peers.push({
           peerId: entry.peerId,
           displayName: entry.displayName,
@@ -858,6 +903,12 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
         })
       }
     }
+
+    // Global session first — this is the open-internet view
+    if (state.globalSession) addEntries(state.globalSession.discovery)
+    // PSK sessions may have additional peers visible only within a private mesh
+    for (const session of state.sessions.values()) addEntries(session.discovery)
+
     return reply.send(peers)
   })
 
@@ -865,36 +916,39 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // GET /discovery/topics — network-wide topic aggregation
   // ---------------------------------------------------------------------------
   app.get('/discovery/topics', async (_req, reply) => {
-    const topicMap = new Map<string, string[]>()
+    const topicMap = new Map<string, Set<string>>()
 
+    const addTopic = (topic: string, peerId: string) => {
+      if (!topicMap.has(topic)) topicMap.set(topic, new Set())
+      topicMap.get(topic)!.add(peerId)
+    }
+
+    // Local topics from all PSK store contents
     for (const session of state.sessions.values()) {
-      for (const [peerId] of [[session.node.peerId.toString()]]) {
-        // Local topics
-        for (const store of [session.stores.skill, session.stores.project]) {
-          const chunks = await store.list().catch(() => [] as MemoryChunk[])
-          for (const chunk of chunks) {
-            if (chunk._tombstone) continue
-            for (const t of chunk.topic) {
-              if (!topicMap.has(t)) topicMap.set(t, [])
-              if (!topicMap.get(t)!.includes(peerId)) topicMap.get(t)!.push(peerId)
-            }
-          }
+      const localPeerId = session.node.peerId.toString()
+      for (const store of [session.stores.skill, session.stores.project]) {
+        const chunks = await store.list().catch(() => [] as MemoryChunk[])
+        for (const chunk of chunks) {
+          if (chunk._tombstone) continue
+          for (const t of chunk.topic) addTopic(t, localPeerId)
         }
       }
 
-      // Remote topics from discovery manifests
+      // Remote topics from PSK network discovery manifests
       for (const networkTopic of session.discovery.getNetworkTopics()) {
-        for (const peerIdStr of networkTopic.peers) {
-          if (!topicMap.has(networkTopic.topic)) topicMap.set(networkTopic.topic, [])
-          if (!topicMap.get(networkTopic.topic)!.includes(peerIdStr)) {
-            topicMap.get(networkTopic.topic)!.push(peerIdStr)
-          }
-        }
+        for (const peerIdStr of networkTopic.peers) addTopic(networkTopic.topic, peerIdStr)
+      }
+    }
+
+    // Remote topics from global network discovery manifests
+    if (state.globalSession) {
+      for (const networkTopic of state.globalSession.discovery.getNetworkTopics()) {
+        for (const peerIdStr of networkTopic.peers) addTopic(networkTopic.topic, peerIdStr)
       }
     }
 
     const topics = [...topicMap.entries()]
-      .map(([topic, peers]) => ({ topic, peerCount: peers.length, peers }))
+      .map(([topic, peersSet]) => ({ topic, peerCount: peersSet.size, peers: [...peersSet] }))
       .sort((a, b) => b.peerCount - a.peerCount)
 
     return reply.send(topics)
@@ -928,24 +982,43 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       collection?: string; since?: string; limit?: string
     }
 
+    const parsedLimit = parseInt(limit, 10)
+    const parsedSince = since ? parseInt(since, 10) : undefined
+    let lastError: unknown = null
+
+    // Try each PSK session first (they may have the peer connected in a private mesh)
     for (const session of state.sessions.values()) {
       try {
-        const result = await session.discovery.browse(
-          peerId,
-          collection,
-          since ? parseInt(since, 10) : undefined,
-          parseInt(limit, 10)
-        )
+        const result = await session.discovery.browse(peerId, collection, parsedSince, parsedLimit)
         return reply.send(result)
       } catch (err) {
-        return reply.status(503).send({
-          error: `Could not browse peer ${peerId}: ${String(err)}`,
-          code: ErrorCode.PEER_DIAL_FAILED,
-        })
+        lastError = err
+        // Continue — peer may be reachable via another session or the global node
       }
     }
 
-    return reply.status(404).send({ error: 'No active network sessions', code: ErrorCode.NETWORK_NOT_FOUND })
+    // Fall back to the global session — any peer reachable on the open internet
+    // can be browsed via the global node even without a PSK network active.
+    if (state.globalSession) {
+      try {
+        const result = await state.globalSession.discovery.browse(peerId, collection, parsedSince, parsedLimit)
+        return reply.send(result)
+      } catch (err) {
+        lastError = err
+      }
+    }
+
+    if (lastError) {
+      return reply.status(503).send({
+        error: `Could not browse peer ${peerId}: ${String(lastError)}`,
+        code: ErrorCode.PEER_DIAL_FAILED,
+      })
+    }
+
+    return reply.status(404).send({
+      error: 'No network sessions available for browsing. Daemon may still be connecting to bootstrap peers.',
+      code: ErrorCode.NETWORK_NOT_FOUND,
+    })
   })
 
   // ===========================================================================

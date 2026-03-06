@@ -112,9 +112,17 @@ export {
   leaveNetwork,
   sessionToDTO,
   deriveNetworkId,
+  // Global network (always-on connectivity layer — no PSK required)
+  joinGlobalNetwork,
+  leaveGlobalNetwork,
 } from './network.js'
-export type { NetworkInfoDTO, NetworkSession } from './network.js'
-// Note: NetworkSession holds live resources — do NOT serialise.
+export type {
+  NetworkInfoDTO,
+  NetworkSession,
+  // Global session — agent's presence on the open internet
+  GlobalSession,
+} from './network.js'
+// Note: NetworkSession and GlobalSession hold live resources — do NOT serialise.
 // Use NetworkInfoDTO for API/HTTP responses.
 
 // GC

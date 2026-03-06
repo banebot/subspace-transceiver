@@ -144,7 +144,7 @@ export async function joinNetwork(
   let node: Libp2p | undefined
   let ctx: OrbitDBContext | undefined
   try {
-    node = await createLibp2pNode(networkKeys, agentPrivateKey, {
+    node = await createLibp2pNode(agentPrivateKey, {
       port: options.port,
       minConnections: options.minConnections,
       maxConnections: options.maxConnections,
@@ -271,5 +271,113 @@ export function sessionToDTO(session: NetworkSession): NetworkInfoDTO {
     peers,
     namespaces: ['skill', 'project'],
     knownPeers,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Global network session — always-on connectivity layer
+// ---------------------------------------------------------------------------
+
+/**
+ * A GlobalSession is a lightweight always-on connection to the global Subspace
+ * network. It gives the agent:
+ *
+ *   - A stable, globally routable identity (Ed25519 PeerId via circuit relay)
+ *   - Participation in the public GossipSub discovery topic
+ *   - The ability to discover and browse other agents anywhere on the internet
+ *   - No PSK required — global presence is the default
+ *
+ * PSK networks (NetworkSession) are overlays on top of the global network.
+ * They add encrypted memory storage and private content sharing, but the
+ * agent exists on the internet from the moment the daemon starts.
+ *
+ * The GlobalSession has NO OrbitDB stores — content storage requires joining
+ * a PSK network. The discovery layer will publish empty bloom filters until
+ * PSK sessions are joined and content is written, which is correct: the agent
+ * is present and addressable on the network before it has published anything.
+ */
+export interface GlobalSession {
+  /** The underlying libp2p node — gives this agent its global PeerId and routing */
+  node: Libp2p
+  /**
+   * Discovery manager — publishes public manifests on the well-known
+   * _subspace/discovery GossipSub topic, maintains the public peer index,
+   * and serves the /subspace/browse/1.0.0 protocol to any incoming peer.
+   */
+  discovery: DiscoveryManager
+  /** The agent's libp2p PeerId string — stable across restarts */
+  localPeerId: string
+}
+
+/**
+ * Join the global Subspace network — connect to bootstrap/relay infrastructure,
+ * start broadcasting public discovery manifests, and register the browse protocol
+ * handler so any peer can browse this agent's public content.
+ *
+ * This is called once at daemon startup, before any PSK networks are joined.
+ * It gives the agent global presence and addressability from first start.
+ *
+ * @param agentPrivateKey  Persistent Ed25519 identity key from identity.ts.
+ * @param options          Connection and discovery configuration.
+ */
+export async function joinGlobalNetwork(
+  agentPrivateKey: PrivateKey,
+  options: {
+    port?: number
+    displayName?: string
+    minConnections?: number
+    maxConnections?: number
+    trustedBootstrapPeers?: string[]
+    /** Circuit relay v2 multiaddrs. Overrides built-in RELAY_ADDRESSES when provided. */
+    relayAddresses?: string[]
+    subscribedTopics?: string[]
+    subscribedPeers?: string[]
+    // Proof-of-work
+    stampCache?: StampCache
+    powBitsForRequests?: number
+    powWindowMs?: number
+    requirePoW?: boolean
+  } = {}
+): Promise<GlobalSession> {
+  const localPeerId = derivePeerId(agentPrivateKey)
+
+  const node = await createLibp2pNode(agentPrivateKey, {
+    port: options.port,
+    minConnections: options.minConnections,
+    maxConnections: options.maxConnections,
+    trustedBootstrapPeers: options.trustedBootstrapPeers,
+    relayAddresses: options.relayAddresses,
+  })
+
+  // Empty stores — the global session has no private memory stores.
+  // The DiscoveryManager handles this gracefully: it publishes an empty bloom
+  // filter and serves empty browse stubs until PSK sessions add content.
+  const discovery = new DiscoveryManager(node, [], {
+    localPeerId,
+    displayName: options.displayName,
+    subscribedTopics: options.subscribedTopics,
+    subscribedPeers: options.subscribedPeers,
+    stampCache: options.stampCache,
+    powBitsForRequests: options.powBitsForRequests,
+    powWindowMs: options.powWindowMs,
+    requirePoW: options.requirePoW,
+  })
+
+  // Start discovery after a short delay to let the node connect to some peers
+  setTimeout(() => { void discovery.start() }, 2000)
+
+  return { node, discovery, localPeerId }
+}
+
+/**
+ * Leave the global network — stop discovery and shut down the libp2p node.
+ * Called during daemon shutdown, after all PSK sessions have been left.
+ */
+export async function leaveGlobalNetwork(session: GlobalSession): Promise<void> {
+  const errors: unknown[] = []
+  await session.discovery.stop().catch((e: unknown) => errors.push(e))
+  await Promise.resolve(session.node.stop()).catch((e: unknown) => errors.push(e))
+  if (errors.length > 0) {
+    console.warn('[subspace] Errors during global network leave:', errors)
   }
 }
