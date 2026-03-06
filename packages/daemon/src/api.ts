@@ -1038,8 +1038,22 @@ async function findLocalChunk(
  */
 export function registerQueryProtocol(session: NetworkSession, state: DaemonState): void {
   void (async () => {
-    // @ts-expect-error — multiple nested @libp2p/interface versions cause handler type conflict; runtime is correct
-    await session.node.handle(QUERY_PROTOCOL, async ({ stream }: { stream: unknown }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await session.node.handle(QUERY_PROTOCOL, async (stream: unknown, connection: unknown) => {
+      // libp2p 3.x passes (stream, connection) as two separate args.
+      // Extract remote peer id for blacklist check BEFORE doing any stream I/O.
+      const remoteConn = connection as { remotePeer?: { toString(): string } } | undefined
+      const remotePeerId = remoteConn?.remotePeer?.toString() ?? ''
+
+      if (remotePeerId && state.reputation.isBlacklisted(remotePeerId)) {
+        console.log(`[subspace] Query from blacklisted peer ${remotePeerId} rejected`)
+        return
+      }
+
+      // TODO(libp2p3): libp2p 3.x streams no longer expose source/sink as
+      // async-iterable properties — they use a different low-level API.
+      // The pipe() calls below will throw at runtime until the handler is
+      // rewritten for the new stream API. Tracked in the Beta Limitations doc.
       const s = stream as unknown as DuplexStream
       try {
         const requestChunks: Uint8Array[] = []
@@ -1057,10 +1071,6 @@ export function registerQueryProtocol(session: NetworkSession, state: DaemonStat
         if (requestChunks.length === 0) return
 
         const req = decodeMessage<{ query: MemoryQuery; requestId: string }>(requestChunks[0])
-
-        // Check if the requesting peer is blacklisted
-        const remotePeers = session.node.getPeers()
-        // (We don't have the remote peerId from the stream directly — skip for now)
 
         const results: MemoryChunk[] = []
         for (const store of [session.stores.skill, session.stores.project]) {
