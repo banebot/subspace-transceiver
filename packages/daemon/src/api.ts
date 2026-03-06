@@ -30,7 +30,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { v4 as uuidv4 } from 'uuid'
 import { peerIdFromString } from '@libp2p/peer-id'
-import type { DaemonConfig } from './config.js'
+import { saveConfig, type DaemonConfig } from './config.js'
 import {
   joinNetwork,
   leaveNetwork,
@@ -302,6 +302,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       const existing = state.config.networks.find(n => deriveNetworkId(n.psk) === networkId)
       if (!existing) {
         state.config.networks.push({ psk: body.psk, name: body.name })
+        // Persist immediately so a crash/SIGKILL doesn't orphan the PSK
+        await saveConfig(state.config).catch(() => {})
       }
       // Register query protocol for new session
       registerQueryProtocol(session, state)
@@ -324,6 +326,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     await leaveNetwork(session)
     state.sessions.delete(networkId)
     state.config.networks = state.config.networks.filter(n => deriveNetworkId(n.psk) !== networkId)
+    // Persist immediately so the removed PSK isn't resurrected on restart
+    await saveConfig(state.config).catch(() => {})
     return reply.status(204).send()
   })
 
