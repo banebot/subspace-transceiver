@@ -391,28 +391,48 @@ export async function createOrbitDBContext(
   // entries from its in-memory LRU cache.  After a restart the LRU is
   // empty and the code falls through to IPFSBlockStorage → broken reads.
   //
-  // Fix: wrap helia.blockstore.get() to consume the async iterable and
-  // return the concatenated bytes as a Promise — matching the interface
-  // OrbitDB expects.
+  // Fix: wrap helia.blockstore.get() with a dual-mode shim that handles both:
+  //  - AsyncIterable<Uint8Array> (Helia v6 / blockstore-level v3)
+  //  - Uint8Array directly         (Helia v5 and earlier, or future regressions)
+  //
+  // The shim detects the return type at runtime so it degrades gracefully if
+  // Helia changes its API in a patch release.
   const originalGet = helia.blockstore.get.bind(helia.blockstore)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ;(helia.blockstore as any).get =
     async function (cid: any, options?: any) {
-      const chunks: Uint8Array[] = []
-      for await (const chunk of originalGet(cid, options)) {
-        chunks.push(chunk as Uint8Array)
+      // Await without consuming — if result is a Uint8Array we're done;
+      // if it is an AsyncGenerator, awaiting it just returns the generator.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw: any = await originalGet(cid, options)
+
+      // Fast path: already a plain Uint8Array (Helia v5 or future revert)
+      if (raw instanceof Uint8Array) return raw
+
+      // Null / undefined → block not found
+      if (raw == null) return undefined
+
+      // AsyncIterable path (Helia v6+): consume and concatenate
+      if (typeof raw[Symbol.asyncIterator] === 'function' || typeof raw[Symbol.iterator] === 'function') {
+        const chunks: Uint8Array[] = []
+        for await (const chunk of raw as AsyncIterable<Uint8Array>) {
+          chunks.push(chunk)
+        }
+        if (chunks.length === 0) return undefined
+        if (chunks.length === 1) return chunks[0]
+        // Multiple chunks: concatenate (rare for OrbitDB entries, but correct)
+        const total = chunks.reduce((n, c) => n + c.length, 0)
+        const result = new Uint8Array(total)
+        let off = 0
+        for (const c of chunks) { result.set(c, off); off += c.length }
+        return result
       }
-      if (chunks.length === 0) return undefined
-      if (chunks.length === 1) return chunks[0]
-      // Multiple chunks: concatenate (unlikely for OrbitDB entries, but safe)
-      const total = chunks.reduce((n, c) => n + c.length, 0)
-      const result = new Uint8Array(total)
-      let offset = 0
-      for (const c of chunks) {
-        result.set(c, offset)
-        offset += c.length
-      }
-      return result
+
+      // Unexpected return type — surface it so it's not silently swallowed
+      throw new TypeError(
+        `helia.blockstore.get() returned an unexpected type: ${Object.prototype.toString.call(raw)}. ` +
+        'The Helia blockstore shim in orbitdb-store.ts may need updating.',
+      )
     }
 
   const orbitdb: OrbitDB = await createOrbitDB({
