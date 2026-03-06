@@ -155,6 +155,11 @@ export { BOOTSTRAP_ADDRESSES, RELAY_ADDRESSES } from './bootstrap.js'
 
 // Node factory (exposed for tests and advanced usage)
 export { createLibp2pNode, derivePeerId } from './node.js'
+export type { CreateNodeOptions, LibP2pNodeWithPruner } from './node.js'
+
+// Connection pruner — disconnects inbound non-Subspace peers after graceMs
+export { SubspaceConnectionPruner } from './connection-pruner.js'
+export type { ConnectionPrunerOptions } from './connection-pruner.js'
 
 // Hashcash proof-of-work (TODO-4e34c409)
 export {

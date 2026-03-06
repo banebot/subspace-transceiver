@@ -28,7 +28,8 @@ import type { EpochManager } from '@subspace-net/core'
 export function startGCScheduler(
   getStores: () => IMemoryStore[],
   getEpochManagers: () => EpochManager[],
-  intervalMs: number = 3_600_000
+  // SUBSPACE_GC_INTERVAL_MS env var enables fast GC cycles in tests
+  intervalMs: number = parseInt(process.env.SUBSPACE_GC_INTERVAL_MS ?? '3600000', 10)
 ): ReturnType<typeof setInterval> {
   const runAll = async () => {
     const now = Date.now()

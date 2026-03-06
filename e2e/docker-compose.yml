@@ -1,0 +1,128 @@
+# Docker Compose topology for Subspace Transceiver E2E tests.
+#
+# All traffic is isolated to the `subspace-test` bridge network.
+# No public IPFS bootstrap/relay used — agents discover each other via mDNS.
+#
+# Usage:
+#   docker compose -f e2e/docker-compose.yml up --build --abort-on-container-exit
+#   docker compose -f e2e/docker-compose.yml down --volumes
+#
+# Topology:
+#   agent-alpha  ←mDNS/libp2p→  agent-beta  ←mDNS/libp2p→  agent-gamma
+#   (all on the same bridge network — mDNS works within a Docker bridge)
+
+version: "3.9"
+
+services:
+  agent-alpha:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    command: ["--port", "7432"]
+    environment:
+      SUBSPACE_AGENT_ID: alpha
+      SUBSPACE_DATA_DIR: /data
+      # Disable public bootstrap/relay — rely on mDNS within Docker bridge
+      SUBSPACE_BOOTSTRAP_ADDRS: ""
+      SUBSPACE_RELAY_ADDRS: ""
+      # Fast timers for test efficiency
+      SUBSPACE_MANIFEST_INTERVAL_MS: "5000"
+      SUBSPACE_GC_INTERVAL_MS: "2000"
+    volumes:
+      - alpha-data:/data
+    networks:
+      subspace-test:
+        aliases:
+          - agent-alpha
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7432/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  agent-beta:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    command: ["--port", "7432"]
+    environment:
+      SUBSPACE_AGENT_ID: beta
+      SUBSPACE_DATA_DIR: /data
+      SUBSPACE_BOOTSTRAP_ADDRS: ""
+      SUBSPACE_RELAY_ADDRS: ""
+      SUBSPACE_MANIFEST_INTERVAL_MS: "5000"
+      SUBSPACE_GC_INTERVAL_MS: "2000"
+    volumes:
+      - beta-data:/data
+    networks:
+      subspace-test:
+        aliases:
+          - agent-beta
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7432/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  agent-gamma:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile
+    command: ["--port", "7432"]
+    environment:
+      SUBSPACE_AGENT_ID: gamma
+      SUBSPACE_DATA_DIR: /data
+      SUBSPACE_BOOTSTRAP_ADDRS: ""
+      SUBSPACE_RELAY_ADDRS: ""
+      SUBSPACE_MANIFEST_INTERVAL_MS: "5000"
+      SUBSPACE_GC_INTERVAL_MS: "2000"
+    volumes:
+      - gamma-data:/data
+    networks:
+      subspace-test:
+        aliases:
+          - agent-gamma
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7432/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # Test runner — runs the vitest E2E suite against the three agent containers.
+  # Exits with the vitest exit code (0 = pass, 1 = fail).
+  runner:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.runner
+    environment:
+      E2E_MODE: docker
+      ALPHA_URL: "http://agent-alpha:7432"
+      BETA_URL: "http://agent-beta:7432"
+      GAMMA_URL: "http://agent-gamma:7432"
+      # Fast timers match what the agent containers use
+      SUBSPACE_MANIFEST_INTERVAL_MS: "5000"
+      SUBSPACE_GC_INTERVAL_MS: "2000"
+    depends_on:
+      agent-alpha:
+        condition: service_healthy
+      agent-beta:
+        condition: service_healthy
+      agent-gamma:
+        condition: service_healthy
+    networks:
+      - subspace-test
+
+volumes:
+  alpha-data:
+  beta-data:
+  gamma-data:
+
+networks:
+  subspace-test:
+    driver: bridge
+    # Enable mDNS/multicast within the bridge network
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"

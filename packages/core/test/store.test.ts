@@ -11,32 +11,28 @@
  * ────────────────────────────────────────────────────────────────
  * WHY we use a synthetic pubsub bridge instead of real GossipSub:
  * ────────────────────────────────────────────────────────────────
- * @chainsafe/libp2p-gossipsub@14.x was built against @libp2p/interface@2
- * (libp2p 2.x / Helia 5.x), but this package uses Helia 6.x which bundles
- * libp2p@3.x with @libp2p/interface@3.  The two are binary-incompatible in
- * three specific ways:
+ * gossipsub@14.x / libp2p@3.x API breaks are now resolved by three
+ * postinstall patches in patches/:
  *
- *   1. multiaddr.tuples() removed in @multiformats/multiaddr@13 — causes
- *      gossipsub's addPeer() to throw on every connection.
- *   2. libp2p 3.x stream handler signature changed from `handler({stream,
- *      connection})` to `handler(stream, connection)` — causes gossipsub's
- *      onIncomingStream to always see connection=undefined.
- *   3. libp2p 3.x streams no longer implement the source/sink async-duplex
- *      interface — causes it-pipe to fail inside OutboundStream constructor.
+ *   1. gossipsub-multiaddr-compat.js  — multiaddr.tuples() → getComponents()
+ *   2. gossipsub-stream-compat.js     — pipe(pushable, stream) → send() loop
+ *   3. gossipsub-handler-compat.js    — handler({stream,connection}) → (stream, connection)
  *
- * All three errors are swallowed silently by gossipsub's catch blocks, so
- * no messages are ever delivered.
+ * GossipSub itself now works (mesh forms, messages are delivered peer-to-peer).
+ *
+ * However, @orbitdb/core@3.x has its own incompatibility with libp2p@3 streams
+ * (OrbitDB's sync.js pipes raw libp2p streams using it-pipe's source/sink
+ * interface, which no longer exists in libp2p@3). This causes OrbitDB CRDT
+ * replication to fail. The fix requires upgrading to @orbitdb/core@4.x, which
+ * is a larger undertaking tracked separately.
  *
  * The synthetic bridge below tests **exactly** the same code path that real
- * gossipsub delivery would trigger:
+ * OrbitDB gossipsub delivery would trigger once @orbitdb/core@4.x is in place:
  *   • OrbitDB's handleUpdateMessage callback (registered on pubsub 'message')
  *   • Entry.decode (decryption + CBOR decode)
  *   • log.joinEntry + access-controller canAppend check
  *   • onUpdate → Documents index rebuild
  *   • db.events.emit('update') → store.emit('replicated')
- *
- * Tracking issue: align to Helia 5.x + libp2p 2.x (the set OrbitDB 3.x
- * was designed for) OR wait for OrbitDB 4.x which targets Helia 6.x.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -143,9 +139,9 @@ describe('OrbitDB replication integration', { timeout: 60_000 }, () => {
       keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32))),
       keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32))),
     ])
-    ;[nodeA, nodeB] = await Promise.all([
-      createLibp2pNode(keyA, { port: 0 }),
-      createLibp2pNode(keyB, { port: 0 }),
+    ;[{ node: nodeA }, { node: nodeB }] = await Promise.all([
+      createLibp2pNode(keyA, { port: 0, connectionPruner: false }),
+      createLibp2pNode(keyB, { port: 0, connectionPruner: false }),
     ])
 
     ;[ctxA, ctxB] = await Promise.all([

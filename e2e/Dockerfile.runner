@@ -1,0 +1,38 @@
+# Test runner image for Docker Compose E2E tests.
+#
+# Runs the vitest E2E suite against already-running daemon containers.
+# Agents are accessed via HTTP API over the Docker bridge network.
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache python3 make g++
+
+COPY package*.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/daemon/package.json packages/daemon/
+COPY packages/cli/package.json packages/cli/
+COPY packages/skill/package.json packages/skill/
+COPY patches/ patches/
+
+RUN npm ci --workspace=packages/core \
+           --workspace=packages/daemon \
+           --workspace=packages/cli \
+           --workspace=packages/skill \
+    && node patches/gossipsub-multiaddr-compat.js \
+    && node patches/gossipsub-stream-compat.js \
+    && node patches/gossipsub-handler-compat.js
+
+COPY packages/ packages/
+COPY tsconfig.base.json ./
+COPY e2e/ e2e/
+
+RUN npm run build --workspace=packages/core \
+    && npm run build --workspace=packages/daemon \
+    && npm run build --workspace=packages/cli
+
+# E2E_MODE=docker: harness reads ALPHA_URL etc from env instead of spawning processes
+ENV E2E_MODE=docker
+
+CMD ["npx", "vitest", "run", "--config", "e2e/vitest.config.ts"]

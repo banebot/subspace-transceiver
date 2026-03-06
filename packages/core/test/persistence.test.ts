@@ -39,7 +39,7 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
 
     // ── Phase 1: write data ──
     const agentKey = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))
-    let node = await createLibp2pNode(agentKey, { port: 0 })
+    let { node } = await createLibp2pNode(agentKey, { port: 0, connectionPruner: false })
     let ctx: OrbitDBContext = await createOrbitDBContext(node, tmpDir, networkId)
     let store = await createOrbitDBStore(ctx.orbitdb, networkKeys, 'project')
 
@@ -73,7 +73,7 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
 
     // ── Phase 2: reopen with same data directory ──
     const agentKey2 = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))
-    node = await createLibp2pNode(agentKey2, { port: 0 })
+    ;({ node } = await createLibp2pNode(agentKey2, { port: 0, connectionPruner: false }))
     ctx = await createOrbitDBContext(node, tmpDir, networkId)
     store = await createOrbitDBStore(ctx.orbitdb, networkKeys, 'project')
 

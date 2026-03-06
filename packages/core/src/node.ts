@@ -36,10 +36,10 @@
  *   - GossipSub topic is derived from the PSK — outsiders see a different hash
  *   - All content is AES-256-GCM encrypted with a PSK-derived key
  *
- * BETA LIMITATION: Until a connection-gater is added, any libp2p node on the
- * internet can connect and consume one of the 50 connection slots, even though
- * it cannot read content. A future fix will disconnect peers that do not
- * subscribe to the PSK-derived GossipSub topic within a few seconds.
+ * CONNECTION PRUNER: inbound peers that never subscribe to any `_subspace/`
+ * GossipSub topic within graceMs (default 30 s) are disconnected, reclaiming
+ * the slot. Peers we dialled ourselves (bootstrap / relay) are exempt.
+ * See SubspaceConnectionPruner in connection-pruner.ts.
  *
  * CRITICAL SERVICE ORDER: `identify` MUST be listed first in the services object.
  * circuitRelayTransport() depends on the identify protocol being registered
@@ -47,6 +47,7 @@
  */
 
 import { createLibp2p, type Libp2p } from 'libp2p'
+import { SubspaceConnectionPruner, type ConnectionPrunerOptions } from './connection-pruner.js'
 import { tcp } from '@libp2p/tcp'
 import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
@@ -89,6 +90,21 @@ export interface CreateNodeOptions {
    * Override from ~/.subspace/config.yaml to point at your own relay server.
    */
   relayAddresses?: string[]
+  /**
+   * Connection pruner options. Inbound peers that never subscribe to a
+   * `_subspace/` GossipSub topic within graceMs are disconnected.
+   * Pass `false` to disable pruning (useful in tests).
+   */
+  connectionPruner?: ConnectionPrunerOptions | false
+}
+
+/**
+ * A started libp2p node bundled with its connection pruner.
+ * Call pruner.stop() before node.stop() to clear pending timers.
+ */
+export interface LibP2pNodeWithPruner {
+  node: Libp2p
+  pruner: SubspaceConnectionPruner | null
 }
 
 /**
@@ -110,21 +126,31 @@ export interface CreateNodeOptions {
 export async function createLibp2pNode(
   agentPrivateKey: PrivateKey,
   options: CreateNodeOptions = {}
-): Promise<Libp2p> {
+): Promise<LibP2pNodeWithPruner> {
   const {
     port = 0,
     minConnections = 5,
     maxConnections = 50,
     trustedBootstrapPeers = [],
     relayAddresses,
+    connectionPruner: prunerOpts = {},
   } = options
 
   // Use caller-supplied relay addresses if provided (even if empty — allows disabling relay).
   // Fall back to the built-in RELAY_ADDRESSES when not specified.
   const effectiveRelayAddresses = relayAddresses !== undefined ? relayAddresses : RELAY_ADDRESSES
 
+  // SUBSPACE_BOOTSTRAP_ADDRS env var overrides the hardcoded BOOTSTRAP_ADDRESSES.
+  // Set to empty string to disable all public bootstrap (use mDNS-only for tests).
+  // Set to a comma-separated list of multiaddrs to use a private bootstrap node.
+  const envBootstrapAddrs = process.env.SUBSPACE_BOOTSTRAP_ADDRS !== undefined
+    ? process.env.SUBSPACE_BOOTSTRAP_ADDRS.split(',').filter(Boolean)
+    : null
+
+  const effectiveBootstrapAddresses = envBootstrapAddrs !== null ? envBootstrapAddrs : BOOTSTRAP_ADDRESSES
+
   const bootstrapList = [
-    ...BOOTSTRAP_ADDRESSES,
+    ...effectiveBootstrapAddresses,
     ...effectiveRelayAddresses,
     ...trustedBootstrapPeers,
   ]
@@ -185,7 +211,15 @@ export async function createLibp2pNode(
   })
 
   await node.start()
-  return node
+
+  // Start the connection pruner unless explicitly disabled
+  let pruner: SubspaceConnectionPruner | null = null
+  if (prunerOpts !== false) {
+    pruner = new SubspaceConnectionPruner(node, prunerOpts)
+    pruner.start()
+  }
+
+  return { node, pruner }
 }
 
 /**

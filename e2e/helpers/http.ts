@@ -1,0 +1,239 @@
+/**
+ * Typed HTTP client for the Subspace daemon REST API.
+ * Wraps fetch() with typed request/response shapes and error handling.
+ */
+
+// ── Wire types (mirrors daemon/src/api.ts shapes) ────────────────────────────
+
+export interface HealthResponse {
+  status: string
+  peerId: string
+  agentUri: string
+  globalConnected: boolean
+  globalPeers: number
+  networks: NetworkInfoDTO[]
+  uptime: number
+  version: string
+}
+
+export interface NetworkInfoDTO {
+  id: string
+  name?: string
+  peerId: string
+  peers: number
+  namespaces: ['skill', 'project']
+  knownPeers: number
+}
+
+export interface MemoryChunk {
+  id: string
+  type: string
+  namespace: string
+  topic: string[]
+  content: string
+  source: {
+    agentId: string
+    peerId: string
+    project?: string
+    sessionId?: string
+    timestamp: number
+  }
+  ttl?: number
+  confidence: number
+  network?: string
+  version: number
+  supersedes?: string
+  signature?: string
+  pow?: {
+    challenge: string
+    nonce: number
+    bits: number
+  }
+  collection?: string
+  slug?: string
+  contentEnvelope?: { body: string; encoding: string }
+  links?: ContentLink[]
+  origin?: string
+  _tombstone?: boolean
+}
+
+export interface ContentLink {
+  target: string
+  rel: string
+  label?: string
+}
+
+export interface MemoryQuery {
+  topics?: string[]
+  namespace?: string
+  peerId?: string
+  collection?: string
+  since?: number
+  limit?: number
+  freetext?: string
+}
+
+export interface PeerInfo {
+  peerId: string
+  displayName?: string
+  collections: string[]
+  chunkCount: number
+  updatedAt: number
+  lastSeen: number
+  agentUri: string
+}
+
+export interface TopicInfo {
+  topic: string
+  peerCount: number
+  peers: string[]
+}
+
+export interface ReputationEntry {
+  peerId: string
+  score: number
+  blacklisted: boolean
+}
+
+// ── Client ───────────────────────────────────────────────────────────────────
+
+export class DaemonClient {
+  constructor(public readonly baseUrl: string) {}
+
+  private async req<T>(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<T> {
+    const url = `${this.baseUrl}${path}`
+    const res = await fetch(url, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    })
+
+    if (res.status === 204) return undefined as T
+
+    const text = await res.text()
+    let data: unknown
+    try {
+      data = JSON.parse(text)
+    } catch {
+      throw new Error(`Non-JSON response from ${method} ${path} (${res.status}): ${text}`)
+    }
+
+    if (!res.ok) {
+      const err = data as { error?: string; code?: string }
+      throw Object.assign(
+        new Error(err.error ?? `HTTP ${res.status} from ${method} ${path}`),
+        { status: res.status, code: err.code, data }
+      )
+    }
+
+    return data as T
+  }
+
+  async getHealth(): Promise<HealthResponse> {
+    return this.req<HealthResponse>('GET', '/health')
+  }
+
+  async getNetworks(): Promise<NetworkInfoDTO[]> {
+    return this.req<NetworkInfoDTO[]>('GET', '/networks')
+  }
+
+  async joinNetwork(psk: string, name?: string): Promise<NetworkInfoDTO> {
+    return this.req<NetworkInfoDTO>('POST', '/networks', { psk, name })
+  }
+
+  async leaveNetwork(networkId: string): Promise<void> {
+    return this.req<void>('DELETE', `/networks/${networkId}`)
+  }
+
+  async putMemory(chunk: Partial<MemoryChunk>): Promise<MemoryChunk> {
+    return this.req<MemoryChunk>('POST', '/memory', chunk)
+  }
+
+  async getMemory(id: string): Promise<MemoryChunk> {
+    return this.req<MemoryChunk>('GET', `/memory/${id}`)
+  }
+
+  async updateMemory(
+    id: string,
+    patch: { content?: string; confidence?: number; links?: ContentLink[] }
+  ): Promise<MemoryChunk> {
+    return this.req<MemoryChunk>('PATCH', `/memory/${id}`, patch)
+  }
+
+  async forgetMemory(id: string): Promise<void> {
+    return this.req<void>('DELETE', `/memory/${id}`)
+  }
+
+  async queryMemory(query: MemoryQuery): Promise<MemoryChunk[]> {
+    return this.req<MemoryChunk[]>('POST', '/memory/query', query)
+  }
+
+  async searchMemory(freetext: string, extra?: MemoryQuery): Promise<MemoryChunk[]> {
+    return this.req<MemoryChunk[]>('POST', '/memory/search', { freetext, ...extra })
+  }
+
+  async getLinks(id: string): Promise<{ id: string; links: ContentLink[] }> {
+    return this.req<{ id: string; links: ContentLink[] }>('GET', `/memory/${id}/links`)
+  }
+
+  async getBacklinks(id: string): Promise<MemoryChunk[]> {
+    return this.req<MemoryChunk[]>('GET', `/memory/${id}/backlinks`)
+  }
+
+  async traverseGraph(
+    startId: string,
+    opts?: { rels?: string[]; maxDepth?: number }
+  ): Promise<{ nodes: MemoryChunk[]; edges: Array<{ source: string; target: string; rel: string }>; traversedFrom: string }> {
+    return this.req('POST', '/memory/graph', { startId, ...opts })
+  }
+
+  async getDiscoveryPeers(): Promise<PeerInfo[]> {
+    return this.req<PeerInfo[]>('GET', '/discovery/peers')
+  }
+
+  async getDiscoveryTopics(): Promise<TopicInfo[]> {
+    return this.req<TopicInfo[]>('GET', '/discovery/topics')
+  }
+
+  async checkTopic(peerId: string, topic: string): Promise<{ peerId: string; topic: string; probably: boolean | null }> {
+    return this.req('GET', `/discovery/topic-check?peerId=${encodeURIComponent(peerId)}&topic=${encodeURIComponent(topic)}`)
+  }
+
+  async browse(
+    peerId: string,
+    opts?: { collection?: string; since?: number; limit?: number }
+  ): Promise<{ stubs: unknown[]; peerId: string }> {
+    const params = new URLSearchParams()
+    if (opts?.collection) params.set('collection', opts.collection)
+    if (opts?.since !== undefined) params.set('since', String(opts.since))
+    if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+    const qs = params.toString()
+    return this.req('GET', `/browse/${peerId}${qs ? '?' + qs : ''}`)
+  }
+
+  async getSite(peerId: string): Promise<{ peerId: string; profile: MemoryChunk | null; collections: string[]; chunkCount: number; agentUri: string }> {
+    return this.req('GET', `/site/${peerId}`)
+  }
+
+  async resolveUri(agentUri: string): Promise<MemoryChunk> {
+    // Strip agent:// prefix, pass rest as path param
+    const path = agentUri.replace(/^agent:\/\//, '')
+    return this.req('GET', `/resolve/${path}`)
+  }
+
+  async getReputation(): Promise<ReputationEntry[]> {
+    return this.req<ReputationEntry[]>('GET', '/security/reputation')
+  }
+
+  async clearReputation(peerId: string): Promise<void> {
+    return this.req<void>('DELETE', `/security/reputation/${encodeURIComponent(peerId)}`)
+  }
+
+  async getPowStatus(): Promise<unknown> {
+    return this.req('GET', '/security/pow-status')
+  }
+}

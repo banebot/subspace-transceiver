@@ -25,6 +25,7 @@ import type { Helia } from 'helia'
 import type { PrivateKey } from '@libp2p/interface'
 import { deriveNetworkKeys, validatePSK, type NetworkKeys } from './crypto.js'
 import { createLibp2pNode, derivePeerId } from './node.js'
+import type { SubspaceConnectionPruner } from './connection-pruner.js'
 import { createOrbitDBContext, type OrbitDBContext } from './orbitdb-store.js'
 import { EpochManager, DEFAULT_EPOCH_CONFIG, type EpochConfig } from './epoch-manager.js'
 import type { IMemoryStore } from './store.js'
@@ -50,6 +51,8 @@ export interface NetworkSession {
   name?: string
   /** Live libp2p node for this network */
   node: Libp2p
+  /** Connection pruner — stops pending prune timers on leave. Null when disabled. */
+  pruner: SubspaceConnectionPruner | null
   /** Shared Helia IPFS node (must be stopped when leaving the network) */
   helia: Helia
   /** Shared OrbitDB instance */
@@ -142,15 +145,16 @@ export async function joinNetwork(
   const localPeerId = derivePeerId(agentPrivateKey)
 
   let node: Libp2p | undefined
+  let pruner: SubspaceConnectionPruner | null = null
   let ctx: OrbitDBContext | undefined
   try {
-    node = await createLibp2pNode(agentPrivateKey, {
+    ;({ node, pruner } = await createLibp2pNode(agentPrivateKey, {
       port: options.port,
       minConnections: options.minConnections,
       maxConnections: options.maxConnections,
       trustedBootstrapPeers: options.trustedBootstrapPeers,
       relayAddresses: options.relayAddresses,
-    })
+    }))
 
     // Create a single Helia + OrbitDB context shared by both namespaces.
     // Pass networkId so OrbitDB always uses the same signing identity across restarts.
@@ -202,6 +206,7 @@ export async function joinNetwork(
       id: networkId,
       name: options.name,
       node,
+      pruner,
       helia: ctx.helia,
       orbitdb: ctx.orbitdb,
       stores: { skill: skillManager, project: projectManager },
@@ -237,6 +242,9 @@ export async function joinNetwork(
  */
 export async function leaveNetwork(session: NetworkSession): Promise<void> {
   const errors: unknown[] = []
+
+  // Stop connection pruner first — clears pending timers
+  session.pruner?.stop()
 
   // Stop discovery manager first (unregisters protocols)
   await session.discovery.stop().catch((e: unknown) => errors.push(e))
@@ -299,6 +307,8 @@ export function sessionToDTO(session: NetworkSession): NetworkInfoDTO {
 export interface GlobalSession {
   /** The underlying libp2p node — gives this agent its global PeerId and routing */
   node: Libp2p
+  /** Connection pruner — stops pending prune timers on leave. Null when disabled. */
+  pruner: SubspaceConnectionPruner | null
   /**
    * Discovery manager — publishes public manifests on the well-known
    * _subspace/discovery GossipSub topic, maintains the public peer index,
@@ -341,7 +351,7 @@ export async function joinGlobalNetwork(
 ): Promise<GlobalSession> {
   const localPeerId = derivePeerId(agentPrivateKey)
 
-  const node = await createLibp2pNode(agentPrivateKey, {
+  const { node, pruner } = await createLibp2pNode(agentPrivateKey, {
     port: options.port,
     minConnections: options.minConnections,
     maxConnections: options.maxConnections,
@@ -366,7 +376,7 @@ export async function joinGlobalNetwork(
   // Start discovery after a short delay to let the node connect to some peers
   setTimeout(() => { void discovery.start() }, 2000)
 
-  return { node, discovery, localPeerId }
+  return { node, pruner, discovery, localPeerId }
 }
 
 /**
@@ -375,6 +385,8 @@ export async function joinGlobalNetwork(
  */
 export async function leaveGlobalNetwork(session: GlobalSession): Promise<void> {
   const errors: unknown[] = []
+  // Stop pruner first — clears pending timers
+  session.pruner?.stop()
   await session.discovery.stop().catch((e: unknown) => errors.push(e))
   await Promise.resolve(session.node.stop()).catch((e: unknown) => errors.push(e))
   if (errors.length > 0) {

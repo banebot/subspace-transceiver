@@ -234,15 +234,39 @@ export async function loadConfig(): Promise<DaemonConfig> {
 
   const config: DaemonConfig = {
     port: fileConfig.port ?? DEFAULTS.port,
-    dataDir: fileConfig.dataDir ?? DEFAULTS.dataDir,
+    dataDir: process.env.SUBSPACE_DATA_DIR ?? fileConfig.dataDir ?? DEFAULTS.dataDir,
     agentId: process.env.SUBSPACE_AGENT_ID ?? fileConfig.agentId ?? null,
     displayName: fileConfig.displayName ?? DEFAULTS.displayName,
     networks: fileConfig.networks ?? DEFAULTS.networks,
-    security: { ...DEFAULT_SECURITY, ...(fileConfig.security ?? {}) },
+    security: {
+      ...DEFAULT_SECURITY,
+      ...(fileConfig.security ?? {}),
+      // Env var overrides for testability (shorter windows enable fast test cycles)
+      ...(process.env.SUBSPACE_RATE_LIMIT_WINDOW_MS
+        ? { rateLimitWindowMs: parseInt(process.env.SUBSPACE_RATE_LIMIT_WINDOW_MS, 10) }
+        : {}),
+      ...(process.env.SUBSPACE_MAX_CHUNKS_PER_PEER
+        ? { maxChunksPerPeerPerWindow: parseInt(process.env.SUBSPACE_MAX_CHUNKS_PER_PEER, 10) }
+        : {}),
+    },
     subscriptions: { ...DEFAULTS.subscriptions, ...(fileConfig.subscriptions ?? {}) },
-    epochs: { ...DEFAULT_EPOCH_CONFIG, ...(fileConfig.epochs ?? {}) },
-    relayAddresses: fileConfig.relayAddresses ?? DEFAULTS.relayAddresses,
+    epochs: {
+      ...DEFAULT_EPOCH_CONFIG,
+      ...(fileConfig.epochs ?? {}),
+      ...(process.env.SUBSPACE_EPOCH_DURATION_MS
+        ? { epochDurationMs: parseInt(process.env.SUBSPACE_EPOCH_DURATION_MS, 10) }
+        : {}),
+    },
+    // SUBSPACE_RELAY_ADDRS="" disables relay (empty string → empty array)
+    // SUBSPACE_RELAY_ADDRS="addr1,addr2" overrides built-in relay list
+    relayAddresses: process.env.SUBSPACE_RELAY_ADDRS !== undefined
+      ? process.env.SUBSPACE_RELAY_ADDRS.split(',').filter(Boolean)
+      : (fileConfig.relayAddresses ?? DEFAULTS.relayAddresses),
   }
+
+  // SUBSPACE_BOOTSTRAP_ADDRS overrides the hardcoded BOOTSTRAP_ADDRESSES in node.ts.
+  // Set via env so all created libp2p nodes pick it up without threading it through config.
+  // This is the primary mechanism for running tests without the public IPFS network.
 
   if (!config.agentId) {
     console.warn(

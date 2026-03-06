@@ -128,7 +128,8 @@ export interface PeerIndexEntry {
 // DiscoveryManager
 // ---------------------------------------------------------------------------
 
-const MANIFEST_INTERVAL_MS = 60_000   // Re-broadcast every 60 seconds
+// SUBSPACE_MANIFEST_INTERVAL_MS env var allows fast manifest cycles in tests (default: 60s)
+const MANIFEST_INTERVAL_MS = parseInt(process.env.SUBSPACE_MANIFEST_INTERVAL_MS ?? '60000', 10)
 const PEER_STALE_MS = 5 * 60_000      // Consider peer stale after 5 minutes
 const PAGE_SIZE = 50                   // Default browse page size
 
