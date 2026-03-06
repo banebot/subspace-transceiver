@@ -128,12 +128,14 @@ const SubspaceAccessController = (options: SubspaceAccessControllerOptions = {})
 
         const doc = value as Record<string, unknown>
 
-        // 1. Validate structural metadata (non-content fields)
+        // 1. Permit tombstones FIRST — they are minimal `{ _id, _tombstone: true }`
+        //    documents that intentionally lack full metadata schema fields.
+        //    Checking metadata before tombstones would reject valid delete ops.
+        if (doc._tombstone === true) return true
+
+        // 2. Validate structural metadata (non-content fields) for regular entries
         const metaResult = metadataSchema.safeParse(doc)
         if (!metaResult.success) return false
-
-        // 2. Permit tombstones from trusted peers (system tombstones)
-        if (doc._tombstone === true) return true
 
         // 3. Content size limit
         // For encrypted docs: check encryptedContent blob size
