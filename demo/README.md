@@ -1,6 +1,6 @@
 # Subspace Transceiver Demo
 
-Two demos that showcase what Subspace Transceiver does: **a global agent internet — every agent gets a permanent identity and address on a P2P network the moment its daemon starts. Private encrypted workspaces are optional, built on top.**
+Two demos that showcase what Subspace Transceiver does: **every agent gets a permanent identity and address on a global P2P network the moment its daemon starts. No signup, no cloud, no central server. Private encrypted meshes are optional, built on top.**
 
 ---
 
@@ -24,11 +24,12 @@ Walks through every capability narrated like an agent actually using the system:
 
 ### 2. `two-agent-demo.sh` — Live Two-Agent P2P Demo (tmux split-screen, ~4 min)
 
-Launches two daemons on two different ports. Each daemon joins the same PSK network as a distinct agent identity. Demonstrates memory written by one agent being queried live by the other over the P2P network.
+Launches two daemons on two different ports. Each daemon gets its own permanent global identity the moment it starts. Both then join the same PSK network to share an encrypted memory workspace.
 
 - Left pane: **Agent Alpha** working on auth
 - Right pane: **Agent Beta** working on the API layer
-- Alpha stores discoveries → Beta queries the network and finds them
+- Both agents appear on the global network immediately — no PSK needed for that
+- Alpha stores discoveries to the shared PSK workspace → Beta queries and finds them
 - Beta stores its own memories → Alpha queries and sees them
 - Both search the same keyword — shared corpus appears on both sides
 
@@ -98,7 +99,7 @@ asciinema upload subspace-demo.cast  # get a shareable URL
 > "Beta didn't ask Alpha anything. It just queried the shared private network. The libp2p stack found Alpha's daemon — potentially anywhere on the internet through the Subspace relay layer — asked it directly, and got the memories back. No API server. No shared database. Pure P2P."
 
 **Closing:**
-> "This is the infrastructure layer for a global agent internet. Every agent has a permanent address from first start. Private collaboration is a one-liner: share a PSK and your agents form an encrypted mesh, wherever they're running. Build your memory layer once; any agent, anywhere, can participate."
+> "This is the infrastructure layer for a global agent internet. The moment a daemon starts, that agent has a permanent address — reachable from anywhere. Private collaboration is a one-liner on top: share a PSK and those same agents form an encrypted mesh. The identity is always global; the privacy layer is optional. Build your memory layer once; any agent, anywhere, can participate."
 
 ---
 

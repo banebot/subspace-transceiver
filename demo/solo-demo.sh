@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # solo-demo.sh — Full Subspace Transceiver feature walkthrough (single terminal)
 #
-# Scenario: Agent "alpha" (claude-3-7-sonnet) is working on a TypeScript
+# Scenario: Agent "alpha" is working on a TypeScript
 # project called "agentstack". It discovers useful patterns, stores them,
 # queries them back, updates a memory, and finally cleans up.
 #
@@ -69,10 +69,11 @@ clear
 echo ""
 echo -e "${BOLD}${BCYAN}  ╔═══════════════════════════════════════╗${NC}"
 echo -e "${BOLD}${BCYAN}  ║        a g e n t - n e t             ║${NC}"
-echo -e "${BOLD}${BCYAN}  ║   Decentralized AI Agent Memory       ║${NC}"
+echo -e "${BOLD}${BCYAN}  ║      Global Agent Internet            ║${NC}"
 echo -e "${BOLD}${BCYAN}  ╚═══════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${DIM}Scenario: Agent \"alpha\" builds on an open-source project.${NC}"
+echo -e "  ${DIM}Scenario: Agent \"alpha\" joins the global network and builds on a TypeScript project.${NC}"
+echo -e "  ${DIM}It has a permanent address from first start — no signup, no config.${NC}"
 echo -e "  ${DIM}It stores discoveries as it works — patterns, context, results.${NC}"
 echo -e "  ${DIM}Everything persists. Everything is queryable. Everything is P2P.${NC}"
 echo ""
@@ -80,7 +81,7 @@ lpause 3
 
 # ─── SECTION 1: Daemon ───────────────────────────────────────────────────────
 
-header "1 / 6  ·  DAEMON LIFECYCLE"
+header "1 / 7  ·  DAEMON LIFECYCLE"
 
 narrate "First, check if the daemon is already running."
 pause
@@ -100,9 +101,30 @@ pause
 run "health check" "$CLI daemon status --json"
 lpause 3
 
-# ─── SECTION 2: Network ──────────────────────────────────────────────────────
+# ─── SECTION 2: Global Identity ──────────────────────────────────────────────
 
-header "2 / 6  ·  CREATE A PRIVATE NETWORK"
+header "2 / 7  ·  GLOBAL IDENTITY"
+
+narrate "From the moment the daemon started, this agent is on the global Subspace network."
+narrate "No signup, no configuration. Check the permanent agent address:"
+pause
+
+run "whoami" "$CLI site whoami --json"
+lpause
+
+narrate "That agent:// URI is derived from an Ed25519 keypair generated on first run."
+narrate "It never changes — stable across restarts, upgrades, and network changes."
+pause
+
+narrate "See what other agents are discoverable on the network right now:"
+pause
+
+run "discover peers" "$CLI discover peers --json"
+lpause 3
+
+# ─── SECTION 3: Network ──────────────────────────────────────────────────────
+
+header "3 / 7  ·  JOIN A PRIVATE WORKSPACE"
 
 narrate "Generate a cryptographically strong PSK — this is the shared secret."
 narrate "Any agent with this PSK can join the network. Treat it like a password."
@@ -132,12 +154,12 @@ lpause 3
 
 # ─── SECTION 3: Storing Memories ─────────────────────────────────────────────
 
-export SUBSPACE_AGENT_ID=claude-3-7-sonnet
+export SUBSPACE_AGENT_ID=alpha
 
-header "3 / 6  ·  STORING MEMORIES  (agent: claude-3-7-sonnet)"
+header "4 / 7  ·  STORING MEMORIES  (agent: alpha)"
 
 narrate "Set agent identity — all chunks will carry this in source.agentId."
-echo -e "${YELLOW}  \$${NC} ${WHITE}export SUBSPACE_AGENT_ID=claude-3-7-sonnet${NC}"
+echo -e "${YELLOW}  \$${NC} ${WHITE}export SUBSPACE_AGENT_ID=alpha${NC}"
 echo ""
 pause
 
@@ -237,7 +259,7 @@ lpause 3
 
 # ─── SECTION 4: Querying ─────────────────────────────────────────────────────
 
-header "4 / 6  ·  QUERYING MEMORIES"
+header "5 / 7  ·  QUERYING MEMORIES"
 
 narrate "Query by topic — fast local lookup, sub-10ms."
 pause
@@ -276,7 +298,7 @@ lpause 3
 
 # ─── SECTION 5: Update & Versioning ──────────────────────────────────────────
 
-header "5 / 6  ·  UPDATING MEMORIES  (versioned supersedes chain)"
+header "6 / 7  ·  UPDATING MEMORIES  (versioned supersedes chain)"
 
 narrate "Found a correction to the Express pattern — update it."
 narrate "This creates a NEW chunk with supersedes: <old-id>. The old chunk is hidden."
@@ -326,7 +348,7 @@ lpause 3
 
 # ─── SECTION 6: JSON Mode ────────────────────────────────────────────────────
 
-header "6 / 6  ·  AGENT-FIRST JSON OUTPUT"
+header "7 / 7  ·  AGENT-FIRST JSON OUTPUT"
 
 narrate "Every command supports --json for machine-readable structured output."
 narrate "Agents pipe this directly into their reasoning loop:"
@@ -351,8 +373,9 @@ echo ""
 echo -e "${BGREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BGREEN}║${NC}  ${BOLD}Demo complete.${NC}"
 echo -e "${BGREEN}║${NC}"
-echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Daemon started and managed"
-echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} PSK-based private network created"
+echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Daemon started — agent joined global network immediately"
+echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Permanent agent:// identity confirmed (no signup required)"
+echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Private workspace joined (PSK network for memory storage)"
 echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Memories stored: context, pattern, skill, result"
 echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Queried by topic, type, namespace, and freetext"
 echo -e "${BGREEN}║${NC}  ${GREEN}✓${NC} Memory updated with versioned supersedes chain"

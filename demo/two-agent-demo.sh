@@ -2,10 +2,14 @@
 # two-agent-demo.sh — Live P2P memory sharing between two agents (tmux)
 #
 # Scenario:
-#   Agent ALPHA (claude-3-7-sonnet) is working on the auth module.
-#   Agent BETA  (claude-3-5-haiku)  is working on the API layer.
-#   They share a PSK network. Neither knows what the other is building
-#   directly — they rely on shared memory for coordination.
+#   Two agents join the global Subspace network the moment their daemons start —
+#   each gets a permanent agent:// address with no signup or configuration.
+#   They then join a shared PSK workspace to exchange encrypted memories.
+#
+#   Agent ALPHA is working on the auth module.
+#   Agent BETA  is working on the API layer.
+#   Neither knows what the other is building directly — they rely on shared
+#   memory for coordination.
 #
 #   Alpha stores discoveries → Beta queries the network and finds them.
 #   Beta stores its own memories → Alpha queries and sees them.
@@ -59,8 +63,8 @@ tmux new-session -d -s "$SESSION" -x 220 -y 50
 tmux split-window -h -t "$SESSION"
 
 # Name the panes
-tmux select-pane -t "$SESSION:0.0" -T "ALPHA · claude-3-7-sonnet · :7432"
-tmux select-pane -t "$SESSION:0.1" -T "BETA  · claude-3-5-haiku  · :7433"
+tmux select-pane -t "$SESSION:0.0" -T "AGENT ALPHA · :7432"
+tmux select-pane -t "$SESSION:0.1" -T "AGENT BETA  · :7433"
 
 # Enable pane titles
 tmux set-option -t "$SESSION" pane-border-status top
@@ -91,16 +95,16 @@ wait_sec() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 send_alpha "clear && echo ''"
-send_alpha "printf '\033[1;36m  ┌──────────────────────────────────────────────┐\n  │  AGENT ALPHA  ·  claude-3-7-sonnet  · :7432  │\n  │  Working on: auth module refactor           │\n  └──────────────────────────────────────────────┘\033[0m\n'"
-send_alpha "export SUBSPACE_AGENT_ID=claude-3-7-sonnet"
+send_alpha "printf '\033[1;36m  ┌──────────────────────────────────────────────┐\n  │  AGENT ALPHA  ·  :7432                       │\n  │  Working on: auth module refactor            │\n  └──────────────────────────────────────────────┘\033[0m\n'"
+send_alpha "export SUBSPACE_AGENT_ID=alpha"
 send_alpha "export SUBSPACE_PORT=$ALPHA_PORT"
 send_alpha "SHARED_PSK='$SHARED_PSK'"
 send_alpha "CLI='$CLI_BIN --port $ALPHA_PORT'"
 send_alpha "echo ''"
 
 send_beta "clear && echo ''"
-send_beta "printf '\033[1;35m  ┌──────────────────────────────────────────────┐\n  │  AGENT BETA   ·  claude-3-5-haiku   · :7433  │\n  │  Working on: API layer / rate limiting      │\n  └──────────────────────────────────────────────┘\033[0m\n'"
-send_beta "export SUBSPACE_AGENT_ID=claude-3-5-haiku"
+send_beta "printf '\033[1;35m  ┌──────────────────────────────────────────────┐\n  │  AGENT BETA   ·  :7433                       │\n  │  Working on: API layer / rate limiting       │\n  └──────────────────────────────────────────────┘\033[0m\n'"
+send_beta "export SUBSPACE_AGENT_ID=beta"
 send_beta "export SUBSPACE_PORT=$BETA_PORT"
 send_beta "SHARED_PSK='$SHARED_PSK'"
 send_beta "CLI='$CLI_BIN --port $BETA_PORT'"

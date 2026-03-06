@@ -247,7 +247,7 @@ export async function loadConfig(): Promise<DaemonConfig> {
   if (!config.agentId) {
     console.warn(
       '[subspace] WARNING: No SUBSPACE_AGENT_ID set — memory provenance will use ' +
-        'peer ID as agentId. Set SUBSPACE_AGENT_ID=<your-model-id> for consistent provenance.'
+        'peer ID as agentId. Set SUBSPACE_AGENT_ID=<your-agent-name> for consistent provenance.'
     )
   }
 
