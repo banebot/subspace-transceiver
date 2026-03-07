@@ -90,6 +90,8 @@ export interface NetworkInfoDTO {
   namespaces: ['skill', 'project']
   /** Known peers from the discovery layer */
   knownPeers: number
+  /** Listening multiaddrs of this PSK node (for explicit peer dialing in test harnesses) */
+  multiaddrs: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +104,37 @@ export interface NetworkInfoDTO {
  */
 export function deriveNetworkId(psk: string): string {
   return crypto.createHash('sha256').update(psk, 'utf8').digest('hex')
+}
+
+/**
+ * Derive a PSK-specific Ed25519 private key from the agent's identity key.
+ *
+ * WHY: Each daemon process runs a global libp2p node AND one libp2p node per
+ * PSK network — all using the same agent private key → same PeerId.  mDNS
+ * then advertises the SAME PeerId on multiple TCP ports (global port + PSK
+ * port).  When peers try to dial using the query protocol they may connect to
+ * the wrong port (the global node's port), causing "Protocol not supported".
+ *
+ * FIX: Give each PSK session its own deterministic libp2p key so mDNS
+ * advertises distinct PeerIds for the global node and each PSK node.  The
+ * derived key is HKDF(agentKey, salt="subspace:psk-peer-id:v1", info=psk).
+ * Content signatures still use the agent's global key (source.peerId is the
+ * agent's global PeerId, not the PSK PeerId).
+ */
+async function derivePskPrivateKey(agentPrivateKey: PrivateKey, psk: string): Promise<PrivateKey> {
+  const { generateKeyPairFromSeed } = await import('@libp2p/crypto/keys')
+
+  const salt = Buffer.from('subspace:psk-peer-id:v1')
+  const ikm = Buffer.from(agentPrivateKey.raw)
+  const info = Buffer.from(psk)
+
+  // HKDF-extract: prk = HMAC-SHA256(salt, ikm)
+  const prk = crypto.createHmac('sha256', salt).update(ikm).digest()
+  // HKDF-expand: okm = HMAC-SHA256(prk, info || 0x01) — first block
+  const okm = crypto.createHmac('sha256', prk).update(Buffer.concat([info, Buffer.from([1])])).digest()
+
+  // Generate Ed25519 key pair from the 32-byte seed
+  return generateKeyPairFromSeed('Ed25519', okm)
 }
 
 /**
@@ -144,11 +177,22 @@ export async function joinNetwork(
   const networkDataDir = path.join(options.dataDir, 'networks', networkId)
   const localPeerId = derivePeerId(agentPrivateKey)
 
+  // Helper: detect "Database failed to open" LevelDB LOCK errors so we can retry.
+  const isDbLockError = (err: unknown): boolean => {
+    const msg = String(err)
+    return msg.includes('Database failed to open') || msg.includes('LOCK') || msg.includes('ERR_OPEN_FAILED')
+  }
+
   let node: Libp2p | undefined
   let pruner: SubspaceConnectionPruner | null = null
   let ctx: OrbitDBContext | undefined
   try {
-    ;({ node, pruner } = await createLibp2pNode(agentPrivateKey, {
+    // Derive a PSK-specific libp2p key so the PSK node has a different PeerId
+    // from the global node.  This avoids mDNS address confusion where two
+    // nodes with the same PeerId advertise on different TCP ports and peers
+    // dial the wrong port for the query protocol.
+    const pskPrivateKey = await derivePskPrivateKey(agentPrivateKey, psk)
+    ;({ node, pruner } = await createLibp2pNode(pskPrivateKey, {
       port: options.port,
       minConnections: options.minConnections,
       maxConnections: options.maxConnections,
@@ -158,7 +202,22 @@ export async function joinNetwork(
 
     // Create a single Helia + OrbitDB context shared by both namespaces.
     // Pass networkId so OrbitDB always uses the same signing identity across restarts.
-    ctx = await createOrbitDBContext(node, networkDataDir, networkId)
+    // Retry on "Database failed to open" — after a daemon restart the OS may need
+    // a brief moment to fully release LevelDB file locks from the previous process.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        ctx = await createOrbitDBContext(node, networkDataDir, networkId)
+        break
+      } catch (err) {
+        if (attempt < 2 && isDbLockError(err)) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
+          continue
+        }
+        throw err
+      }
+    }
+
+    if (!ctx) throw new Error('createOrbitDBContext returned undefined after retries')
 
     const epochConfig = options.epochConfig ?? DEFAULT_EPOCH_CONFIG
     const [skillManager, projectManager] = await Promise.all([
@@ -186,9 +245,14 @@ export async function joinNetwork(
     skillManager.on('replicated', () => { void updateBacklinks(skillManager) })
     projectManager.on('replicated', () => { void updateBacklinks(projectManager) })
 
-    // Create and start the discovery manager
+    // Create and start the discovery manager.
+    // For PSK sessions, localPeerId is the PSK node's peer ID (derived key) and
+    // agentPeerId is the GLOBAL identity peer ID (so remote peers can map between them).
+    const pskNodePeerId = node.peerId.toString()
+    const globalPeerId = localPeerId  // derivePeerId(agentPrivateKey) = GLOBAL peer ID
     const discovery = new DiscoveryManager(node, [skillManager, projectManager], {
-      localPeerId,
+      localPeerId: pskNodePeerId,
+      agentPeerId: pskNodePeerId !== globalPeerId ? globalPeerId : undefined,
       displayName: options.displayName,
       subscribedTopics: options.subscribedTopics,
       subscribedPeers: options.subscribedPeers,
@@ -199,8 +263,11 @@ export async function joinNetwork(
       requirePoW: options.requirePoW,
     })
 
-    // Start discovery after a short delay to let the node connect to some peers
-    setTimeout(() => { void discovery.start() }, 2000)
+    // Subscribe immediately so we can receive other peers' manifests from the start.
+    // The first self-broadcast is deferred so peers have time to connect and join
+    // the GossipSub mesh.  triggerRebroadcast() (called after each write) forces
+    // a re-broadcast once data is in the store.
+    void discovery.start()
 
     const session: NetworkSession = {
       id: networkId,
@@ -272,6 +339,8 @@ export function sessionToDTO(session: NetworkSession): NetworkInfoDTO {
   const peers = session.node.getPeers().length
   const knownPeers = session.discovery.getKnownPeers().length
 
+  const multiaddrs = session.node.getMultiaddrs().map(ma => ma.toString())
+
   return {
     id: session.id,
     name: session.name,
@@ -279,6 +348,7 @@ export function sessionToDTO(session: NetworkSession): NetworkInfoDTO {
     peers,
     namespaces: ['skill', 'project'],
     knownPeers,
+    multiaddrs,
   }
 }
 
@@ -317,6 +387,8 @@ export interface GlobalSession {
   discovery: DiscoveryManager
   /** The agent's libp2p PeerId string — stable across restarts */
   localPeerId: string
+  /** TCP port this node listens on (for constructing dial-able multiaddrs) */
+  port: number
 }
 
 /**
@@ -376,7 +448,7 @@ export async function joinGlobalNetwork(
   // Start discovery after a short delay to let the node connect to some peers
   setTimeout(() => { void discovery.start() }, 2000)
 
-  return { node, pruner, discovery, localPeerId }
+  return { node, pruner, discovery, localPeerId, port: options.port ?? 7432 }
 }
 
 /**

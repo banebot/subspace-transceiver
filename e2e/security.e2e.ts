@@ -43,7 +43,8 @@ describe('Ed25519 signing and proof-of-work', () => {
     expect(chunk.pow).toBeDefined()
     expect(chunk.pow!.bits).toBeGreaterThan(0)
     expect(chunk.pow!.challenge).toBeTruthy()
-    expect(typeof chunk.pow!.nonce).toBe('number')
+    // nonce is stored as a hex string (see HashcashStamp.nonce: string)
+    expect(typeof chunk.pow!.nonce).toBe('string')
   })
 
   it('GET /security/pow-status returns PoW config and cached stamps', async () => {

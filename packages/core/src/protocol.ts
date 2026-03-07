@@ -5,7 +5,12 @@
  * This custom protocol enables daemon-to-daemon memory queries across peers.
  *
  * Wire format: length-prefixed JSON over a libp2p stream.
- * Uses it-length-prefixed + it-pipe for framing.
+ * Uses it-length-prefixed for framing.
+ *
+ * libp2p v3 stream API:
+ *   Reading  → `for await (const chunk of stream)` — stream is AsyncIterable
+ *   Writing  → `stream.send(chunk)` — returns false if backpressured (wait 'drain')
+ *   Closing  → `stream.close()`
  *
  * Request  → { query: MemoryQuery, requestId: string }
  * Response ← { requestId: string, chunks: MemoryChunk[], peerId: string }
@@ -13,21 +18,12 @@
  * Timeout: 5000ms per peer. Timed-out or failed peers are skipped silently.
  */
 
-import { pipe } from 'it-pipe'
 import * as lp from 'it-length-prefixed'
 import type { Libp2p } from 'libp2p'
-import type { PeerId, Stream } from '@libp2p/interface'
-import type { Source, Sink } from 'it-stream-types'
+import type { PeerId } from '@libp2p/interface'
 import type { MemoryChunk, MemoryQuery } from './schema.js'
 import { NetworkError, ErrorCode } from './errors.js'
 import type { HashcashStamp } from './pow.js'
-
-// Typed duplex interface for it-pipe compatibility
-interface DuplexStream {
-  source: AsyncIterable<Uint8Array>
-  sink: Sink<AsyncIterable<Uint8Array>>
-  close(): Promise<void>
-}
 
 export const QUERY_PROTOCOL = '/subspace/query/1.0.0'
 
@@ -66,6 +62,37 @@ export function decodeMessage<T>(data: Uint8Array | ArrayBufferView): T {
   return JSON.parse(decoder.decode(bytes)) as T
 }
 
+/**
+ * libp2p v3 Stream interface used at runtime.
+ *
+ * In libp2p v3, streams implement AsyncIterable for reading and expose a
+ * `send(data)` method for writing (different from the old it-stream Duplex API).
+ */
+interface Libp2pV3Stream extends AsyncIterable<Uint8Array | { subarray(): Uint8Array }> {
+  /** Write a chunk to the stream. Returns false when backpressured. */
+  send(data: Uint8Array | Uint8Array[]): boolean
+  /** Gracefully close the stream. */
+  close(opts?: { signal?: AbortSignal }): Promise<void>
+  /** Abort the stream with an error. */
+  abort(err: Error): void
+}
+
+/**
+ * Send all chunks from an async iterable to a stream, handling backpressure.
+ */
+async function streamSend(stream: Libp2pV3Stream, source: AsyncIterable<Uint8Array>): Promise<void> {
+  for await (const chunk of source) {
+    const drained = stream.send(chunk)
+    if (!drained) {
+      // Wait for drain — stream will emit 'drain' event when ready
+      await new Promise<void>((resolve) => {
+        ;(stream as unknown as { addEventListener(e: string, h: () => void, o?: { once?: boolean }): void })
+          .addEventListener('drain', resolve, { once: true })
+      })
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Client — send a query to a single peer
 // ---------------------------------------------------------------------------
@@ -97,30 +124,20 @@ export async function sendQuery(
     )
   }
 
-  // Cast to typed duplex — libp2p Stream extends Duplex<source, sink> at runtime
-  const stream = rawStream as unknown as DuplexStream
+  const stream = rawStream as unknown as Libp2pV3Stream
 
   try {
-    const responseChunks: Uint8Array[] = []
-
+    // Write the request (length-prefixed JSON)
     async function* requestSource() { yield encodeMessage(request) }
-    await pipe(
-      requestSource(),
-      (source) => lp.encode(source),
-      stream.sink
-    )
+    await streamSend(stream, lp.encode(requestSource()))
 
-    await pipe(
-      stream.source,
-      (source) => lp.decode(source),
-      async function (source) {
-        for await (const chunk of source) {
-          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
-          responseChunks.push(bytes)
-          break // We expect exactly one response frame
-        }
-      }
-    )
+    // Read the response (length-prefixed JSON, one frame)
+    const responseChunks: Uint8Array[] = []
+    for await (const chunk of lp.decode(stream as AsyncIterable<Uint8Array>)) {
+      const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
+      responseChunks.push(bytes)
+      break // We expect exactly one response frame
+    }
 
     if (responseChunks.length === 0) {
       throw new NetworkError(

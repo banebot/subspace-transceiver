@@ -9,8 +9,12 @@ export default defineConfig({
     hookTimeout: 60_000,
     // Each test file gets its own process — no shared state between files.
     pool: 'forks',
-    // Serial execution — a laptop can't run 5+ daemon processes per test file
-    // concurrently across multiple files without exhausting ports and memory.
+    // Limit parallel workers: each test file spawns 2-4 daemon processes.
+    // With 10 test files and 8 cores, all running simultaneously would create
+    // 20-30 daemons — exhausting ports, memory, and mDNS capacity.
+    // Cap at 4 to keep daemon count ≤ 12 for reliable test execution.
+    maxForks: 4,
+    // Serial execution within each file — no shared state between tests.
     maxConcurrency: 1,
     // Show test names as they run (useful for long-running tests)
     reporter: 'verbose',
@@ -20,6 +24,13 @@ export default defineConfig({
       // Default testability knobs — can be overridden per-suite
       SUBSPACE_MANIFEST_INTERVAL_MS: '5000',
       SUBSPACE_GC_INTERVAL_MS: '2000',
+      // SUBSPACE_BOOTSTRAP_ADDRS='' is set per-agent in harness.ts to avoid
+      // polluting the global bootstrap network. Relay addresses are kept
+      // enabled so PSK nodes can connect to relay servers for NAT traversal.
+      // Note: SUBSPACE_MAX_CHUNKS_PER_PEER is intentionally NOT set here so
+      // the rate-limiting test's per-suite extraEnv can override the daemon
+      // default cleanly. The daemon default is raised to 10000 in config.ts
+      // so test suites never accidentally hit the cap.
     },
   },
 })

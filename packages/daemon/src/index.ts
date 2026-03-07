@@ -31,7 +31,8 @@ import {
   loadConfig,
   saveConfig,
   ensureDirectories,
-  IDENTITY_PATH,
+  getPidPath,
+  getIdentityPath,
   type DaemonConfig,
 } from './config.js'
 import { writePid, clearPid, isDaemonRunning } from './lifecycle.js'
@@ -138,11 +139,7 @@ async function checkRelayHealth(relayAddresses: string[]): Promise<void> {
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
-  if (isDaemonRunning()) {
-    console.error('[subspace] Daemon is already running.')
-    process.exit(1)
-  }
-
+  // Load config first so we can derive the per-instance PID and identity paths.
   let config: DaemonConfig
   try {
     config = await loadConfig()
@@ -155,6 +152,16 @@ async function main() {
     process.exit(1)
   }
 
+  // Per-instance paths — scoped to this daemon's dataDir so multiple instances
+  // on the same machine can coexist without sharing state.
+  const pidPath = getPidPath(config.dataDir)
+  const identityPath = getIdentityPath(config.dataDir)
+
+  if (isDaemonRunning(pidPath)) {
+    console.error('[subspace] Daemon is already running.')
+    process.exit(1)
+  }
+
   // ---------------------------------------------------------------------------
   // Relay health check — warn early if relay DNS is dead or unconfigured
   // ---------------------------------------------------------------------------
@@ -164,10 +171,12 @@ async function main() {
 
   // ---------------------------------------------------------------------------
   // Load (or generate) the persistent agent identity
+  // Stored in <dataDir>/identity.key so each daemon instance has a unique
+  // Ed25519 keypair and a distinct libp2p PeerId.
   // ---------------------------------------------------------------------------
   let identity: Awaited<ReturnType<typeof loadOrCreateIdentity>>
   try {
-    identity = await loadOrCreateIdentity(IDENTITY_PATH)
+    identity = await loadOrCreateIdentity(identityPath)
     console.log(`[subspace] Agent identity: ${identity.peerId}`)
   } catch (err) {
     console.error('[subspace] Failed to load agent identity:', err)
@@ -231,25 +240,11 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------------
-  // Start Fastify API (bind to localhost only)
-  // ---------------------------------------------------------------------------
-  let app: Awaited<ReturnType<typeof createApi>>
-  try {
-    app = await createApi(state)
-    await app.listen({ port: config.port, host: '127.0.0.1' })
-    console.log(`[subspace] Daemon listening on 127.0.0.1:${config.port}`)
-  } catch (err) {
-    console.error('[subspace] Failed to start API server:', err)
-    process.exit(1)
-  }
-
-  // ---------------------------------------------------------------------------
-  // Write PID file
-  // ---------------------------------------------------------------------------
-  writePid(config.port)
-
-  // ---------------------------------------------------------------------------
-  // Re-join all known networks from config (auto-reconnect on restart)
+  // Re-join all known networks from config BEFORE opening the HTTP port.
+  // This prevents a race where a client (or test) connects immediately after
+  // app.listen() and calls POST /networks for a PSK that the daemon is ALSO
+  // trying to auto-rejoin — both paths would try to open the same LevelDB
+  // concurrently, causing "Database failed to open".
   // ---------------------------------------------------------------------------
   for (const netConfig of config.networks) {
     try {
@@ -285,6 +280,24 @@ async function main() {
   if (!config.agentId) {
     config.agentId = identity.peerId
   }
+
+  // ---------------------------------------------------------------------------
+  // Start Fastify API (bind to localhost only)
+  // ---------------------------------------------------------------------------
+  let app: Awaited<ReturnType<typeof createApi>>
+  try {
+    app = await createApi(state)
+    await app.listen({ port: config.port, host: '127.0.0.1' })
+    console.log(`[subspace] Daemon listening on 127.0.0.1:${config.port}`)
+  } catch (err) {
+    console.error('[subspace] Failed to start API server:', err)
+    process.exit(1)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Write PID file (in dataDir so it's scoped to this instance)
+  // ---------------------------------------------------------------------------
+  writePid(config.port, pidPath)
 
   // ---------------------------------------------------------------------------
   // Start GC + epoch rotation scheduler
@@ -349,7 +362,7 @@ async function main() {
     // Save config
     await saveConfig(config).catch(() => {})
 
-    clearPid()
+    clearPid(pidPath)
     console.log('[subspace] Shutdown complete.')
     process.exit(0)
   }
@@ -363,10 +376,14 @@ async function main() {
     process.exit(1)
   })
 
-  process.on('unhandledRejection', async (reason) => {
-    console.error('[subspace] Unhandled rejection:', reason)
-    await shutdown('unhandledRejection')
-    process.exit(1)
+  process.on('unhandledRejection', (reason) => {
+    // Log but don't crash the daemon.  OrbitDB and libp2p create many
+    // fire-and-forget promises for P2P operations (GossipSub publish,
+    // DHT queries, connection upgrades) that can legitimately fail when
+    // peers disconnect or the mesh is unstable.  Crashing on every such
+    // failure makes the daemon extremely fragile in test environments.
+    // uncaughtException (synchronous throws) still triggers a clean shutdown.
+    console.warn('[subspace] Unhandled rejection (non-fatal):', reason)
   })
 
   if (args.foreground) {

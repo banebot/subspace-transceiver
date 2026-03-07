@@ -11,6 +11,7 @@ export interface HealthResponse {
   agentUri: string
   globalConnected: boolean
   globalPeers: number
+  globalMultiaddrs: string[]
   networks: NetworkInfoDTO[]
   uptime: number
   version: string
@@ -23,6 +24,7 @@ export interface NetworkInfoDTO {
   peers: number
   namespaces: ['skill', 'project']
   knownPeers: number
+  multiaddrs: string[]
 }
 
 export interface MemoryChunk {
@@ -106,9 +108,15 @@ export class DaemonClient {
     body?: unknown
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`
+    // Use Connection: close to prevent stale keepalive connections from being
+    // reused after a daemon restart (SIGKILL closes the TCP socket, and Node's
+    // fetch pool would otherwise retry on the broken connection → fetch failed).
     const res = await fetch(url, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        'Connection': 'close',
+      },
       body: body ? JSON.stringify(body) : undefined,
     })
 
@@ -147,6 +155,14 @@ export class DaemonClient {
 
   async leaveNetwork(networkId: string): Promise<void> {
     return this.req<void>('DELETE', `/networks/${networkId}`)
+  }
+
+  async dialPskPeer(networkId: string, multiaddr: string): Promise<{ ok: boolean }> {
+    return this.req<{ ok: boolean }>('POST', `/networks/${networkId}/dial`, { multiaddr })
+  }
+
+  async dialGlobal(multiaddr: string): Promise<{ ok: boolean }> {
+    return this.req<{ ok: boolean }>('POST', '/dial', { multiaddr })
   }
 
   async putMemory(chunk: Partial<MemoryChunk>): Promise<MemoryChunk> {

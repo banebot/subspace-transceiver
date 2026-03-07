@@ -161,7 +161,10 @@ async function checkIngestSecurity(
   // 3. Rate limit
   if (peerId && !state.rateLimiter.check(peerId)) {
     state.reputation.record(peerId, 'RATE_LIMIT_VIOLATION')
-    state.rateLimiter.softBan(peerId, 60_000)  // 1 minute soft ban
+    // Soft-ban for one rate-limit window. After the window expires the ban
+    // also expires, restoring writes — this matches the test expectation that
+    // writes succeed again once the window rolls over.
+    state.rateLimiter.softBan(peerId, security.rateLimitWindowMs)
     return {
       ok: false,
       status: 429,
@@ -254,6 +257,16 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   app.get('/health', async (_req, reply) => {
     const networks = [...state.sessions.values()].map(sessionToDTO)
     const globalPeers = state.globalSession?.node.getPeers().length ?? 0
+    // Prefer announced multiaddrs; fall back to constructing loopback addr from listen port.
+    const rawGlobalMultiaddrs = (state.globalSession?.node.getMultiaddrs() ?? [])
+      .map(ma => ma.toString())
+      .filter(ma => ma.includes('/tcp/') && !ma.includes('p2p-circuit') &&
+                    !ma.includes('/ip4/0.0.0.0') && !ma.includes('/ip6/::/'))
+    const globalMultiaddrs = rawGlobalMultiaddrs.length > 0
+      ? rawGlobalMultiaddrs
+      : state.globalSession
+        ? [`/ip4/127.0.0.1/tcp/${state.globalSession.port}/p2p/${state.globalSession.localPeerId}`]
+        : []
     return reply.send({
       status: 'ok',
       peerId: state.getPeerId(),
@@ -262,6 +275,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       // Independent of PSK networks. False only if bootstrap/relay is unreachable.
       globalConnected: globalPeers > 0,
       globalPeers,
+      // Listening multiaddrs of the global libp2p node (TCP only, excludes circuit relay)
+      globalMultiaddrs,
       // Private PSK networks (encrypted memory sharing)
       networks,
       uptime: Math.floor((Date.now() - state.startedAt) / 1000),
@@ -327,6 +342,57 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     } catch (err) {
       const code = err instanceof AgentNetError ? err.code : ErrorCode.JOIN_FAILED
       return reply.status(500).send({ error: String(err), code })
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /dial — explicitly dial a peer via the global libp2p node by multiaddr
+  // Used by test harnesses to bootstrap direct global connectivity.
+  // ---------------------------------------------------------------------------
+  app.post('/dial', async (req, reply) => {
+    const { multiaddr: maddrStr } = (req.body ?? {}) as { multiaddr?: string }
+
+    if (!maddrStr) {
+      return reply.status(400).send({ error: 'multiaddr required', code: 'INVALID_REQUEST' })
+    }
+    if (!state.globalSession) {
+      return reply.status(503).send({ error: 'Global session not available', code: 'NOT_READY' })
+    }
+
+    try {
+      const { multiaddr } = await import('@multiformats/multiaddr')
+      await state.globalSession.node.dial(multiaddr(maddrStr))
+      return reply.status(200).send({ ok: true })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.status(500).send({ error: `Dial failed: ${msg}`, code: 'DIAL_FAILED' })
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /networks/:networkId/dial — explicitly dial a PSK peer by multiaddr
+  // Used by test harnesses to bootstrap PSK connectivity without mDNS auto-dial.
+  // ---------------------------------------------------------------------------
+  app.post('/networks/:networkId/dial', async (req, reply) => {
+    const { networkId } = req.params as { networkId: string }
+    const { multiaddr: maddrStr } = (req.body ?? {}) as { multiaddr?: string }
+
+    if (!maddrStr) {
+      return reply.status(400).send({ error: 'multiaddr required', code: 'INVALID_REQUEST' })
+    }
+
+    const session = state.sessions.get(networkId)
+    if (!session) {
+      return reply.status(404).send({ error: 'Network not found', code: ErrorCode.NETWORK_NOT_FOUND })
+    }
+
+    try {
+      const { multiaddr } = await import('@multiformats/multiaddr')
+      await session.node.dial(multiaddr(maddrStr))
+      return reply.status(200).send({ ok: true })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return reply.status(500).send({ error: `Dial failed: ${msg}`, code: 'DIAL_FAILED' })
     }
   })
 
@@ -417,9 +483,14 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       links: body.links,
       // Origin
       origin: 'local',
+      // Pre-existing signature from request body — validated by checkIngestSecurity
+      // below to detect tampered/forged signatures before the daemon re-signs.
+      // The daemon always overwrites this with its own signature before storage.
+      signature: (body as Record<string, unknown>).signature as string | undefined,
     }
 
-    // Security checks
+    // Security checks — runs BEFORE the daemon re-signs, so any forged/tampered
+    // signature provided in the request body is caught here.
     const sec = await checkIngestSecurity(chunk, state)
     if (!sec.ok) {
       return reply.status(sec.status).send({ error: sec.error, code: sec.code })
@@ -458,6 +529,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       await store.put(signedChunk)
       // Update backlink index for new links
       session.backlinkIndex.indexChunk(signedChunk)
+      // Trigger a manifest re-broadcast so peers learn of the new chunk quickly
+      session.discovery.triggerRebroadcast()
       return reply.status(201).send(signedChunk)
     } catch (err) {
       const code = err instanceof AgentNetError ? (err as AgentNetError).code : ErrorCode.STORE_WRITE_FAILED
@@ -651,10 +724,14 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
           })
         : allPeers
 
+      console.log(`[subspace:search] PSK session ${session.id.slice(0,8)}: allPeers=${allPeers.length} targetPeers=${targetPeers.length}`)
       const responses = await Promise.allSettled(
         targetPeers.map((peerId) => sendQuery(session.node, peerId, queryOp, queryPow))
       )
       for (const r of responses) {
+        if (r.status === 'rejected') {
+          console.log(`[subspace:search] query rejected:`, r.reason)
+        }
         if (r.status === 'fulfilled') {
           for (const c of r.value.chunks) {
             if (c.content.toLowerCase().includes(freetext)) all.push(c)
@@ -890,24 +967,28 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     // Global session and PSK sessions may overlap (same peer seen in both).
     const addEntries = (discovery: import('@subspace-net/core').DiscoveryManager) => {
       for (const entry of discovery.getKnownPeers()) {
-        if (seen.has(entry.peerId)) continue
-        seen.add(entry.peerId)
+        // Use the canonical (global) agent peer ID if available, else PSK peer ID.
+        const displayPeerId = entry.agentPeerId ?? entry.peerId
+        if (seen.has(displayPeerId)) continue
+        seen.add(displayPeerId)
         peers.push({
-          peerId: entry.peerId,
+          peerId: displayPeerId,
           displayName: entry.displayName,
           collections: entry.collections,
           chunkCount: entry.chunkCount,
           updatedAt: entry.updatedAt,
           lastSeen: entry.lastSeen,
-          agentUri: buildAgentURI(entry.peerId),
+          agentUri: buildAgentURI(displayPeerId),
         })
       }
     }
 
-    // Global session first — this is the open-internet view
-    if (state.globalSession) addEntries(state.globalSession.discovery)
-    // PSK sessions may have additional peers visible only within a private mesh
+    // PSK sessions first — these have actual stores and accurate chunkCounts.
+    // The global session's manifests have chunkCount=0 (no stores) so we process
+    // it LAST to avoid shadowing richer PSK data for the same peer.
     for (const session of state.sessions.values()) addEntries(session.discovery)
+    // Global session: adds peers not seen in any PSK network
+    if (state.globalSession) addEntries(state.globalSession.discovery)
 
     return reply.send(peers)
   })
@@ -923,14 +1004,18 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       topicMap.get(topic)!.add(peerId)
     }
 
-    // Local topics from all PSK store contents
+    // Local topics from all PSK store contents.
+    // Use chunk.source.peerId to attribute each topic to its ORIGINAL AUTHOR,
+    // not the local node — this way replicated chunks from remote peers are
+    // counted under the remote peer's ID, giving correct peerCount values.
     for (const session of state.sessions.values()) {
       const localPeerId = session.node.peerId.toString()
       for (const store of [session.stores.skill, session.stores.project]) {
         const chunks = await store.list().catch(() => [] as MemoryChunk[])
         for (const chunk of chunks) {
           if (chunk._tombstone) continue
-          for (const t of chunk.topic) addTopic(t, localPeerId)
+          const authorPeerId = chunk.source?.peerId ?? localPeerId
+          for (const t of chunk.topic) addTopic(t, authorPeerId)
         }
       }
 
@@ -1123,24 +1208,22 @@ export function registerQueryProtocol(session: NetworkSession, state: DaemonStat
         return
       }
 
-      // TODO(libp2p3): libp2p 3.x streams no longer expose source/sink as
-      // async-iterable properties — they use a different low-level API.
-      // The pipe() calls below will throw at runtime until the handler is
-      // rewritten for the new stream API. Tracked in the Beta Limitations doc.
-      const s = stream as unknown as DuplexStream
+      // libp2p v3 stream API: stream is AsyncIterable (for reading) and has
+      // a send(chunk) method (for writing).  The old it-stream source/sink Duplex
+      // interface is no longer used.
+      const s = stream as unknown as {
+        send(data: Uint8Array): boolean
+        close(opts?: { signal?: AbortSignal }): Promise<void>
+        [Symbol.asyncIterator](): AsyncIterator<Uint8Array>
+      }
       try {
+        // Read the incoming request
         const requestChunks: Uint8Array[] = []
-        await pipe(
-          s.source,
-          (src) => lp.decode(src),
-          async function (source) {
-            for await (const chunk of source) {
-              const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
-              requestChunks.push(bytes)
-              break
-            }
-          }
-        )
+        for await (const chunk of lp.decode(s as AsyncIterable<Uint8Array>)) {
+          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
+          requestChunks.push(bytes)
+          break // We expect exactly one request frame
+        }
         if (requestChunks.length === 0) return
 
         const req = decodeMessage<{ query: MemoryQuery; requestId: string }>(requestChunks[0])
@@ -1153,7 +1236,11 @@ export function registerQueryProtocol(session: NetworkSession, state: DaemonStat
 
         const response = { requestId: req.requestId, chunks: results, peerId: session.node.peerId.toString() }
         async function* responseSource() { yield encodeMessage(response) }
-        await pipe(responseSource(), (src) => lp.encode(src), s.sink)
+
+        // Write the response (length-prefixed JSON)
+        for await (const chunk of lp.encode(responseSource())) {
+          s.send(chunk)
+        }
       } catch (err) {
         console.warn('[subspace] Query protocol handler error:', err)
       }

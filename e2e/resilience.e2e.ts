@@ -62,7 +62,9 @@ describe('partition and heal — agents resync after disconnection', () => {
 
     // HEAL: restart Beta with the same dataDir + PSK
     await harness.restartAgent('beta')
-    await harness.client('beta').joinNetwork(psk)
+    const betaRejoin = await harness.client('beta').joinNetwork(psk)
+    // Re-establish PSK peer connections — libp2p v3 requires explicit dial
+    await harness.connectPskPeers(betaRejoin.id, ['alpha', 'beta', 'gamma'])
 
     // Beta should eventually see all 10 chunks (5 before + 5 during partition)
     await pollUntil(

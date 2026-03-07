@@ -136,9 +136,16 @@ export async function createLibp2pNode(
     connectionPruner: prunerOpts = {},
   } = options
 
+  // SUBSPACE_RELAY_ADDRS env var overrides the hardcoded RELAY_ADDRESSES.
+  // Set to empty string to disable circuit relay (e.g. mDNS-only test environments).
+  const envRelayAddrs = process.env.SUBSPACE_RELAY_ADDRS !== undefined
+    ? process.env.SUBSPACE_RELAY_ADDRS.split(',').filter(Boolean)
+    : null
+  const defaultRelayAddresses = envRelayAddrs !== null ? envRelayAddrs : RELAY_ADDRESSES
+
   // Use caller-supplied relay addresses if provided (even if empty — allows disabling relay).
-  // Fall back to the built-in RELAY_ADDRESSES when not specified.
-  const effectiveRelayAddresses = relayAddresses !== undefined ? relayAddresses : RELAY_ADDRESSES
+  // Fall back to the env/built-in RELAY_ADDRESSES when not specified.
+  const effectiveRelayAddresses = relayAddresses !== undefined ? relayAddresses : defaultRelayAddresses
 
   // SUBSPACE_BOOTSTRAP_ADDRS env var overrides the hardcoded BOOTSTRAP_ADDRESSES.
   // Set to empty string to disable all public bootstrap (use mDNS-only for tests).
@@ -204,13 +211,82 @@ export async function createLibp2pNode(
       mdns: mdns(),
       dcutr: dcutr(),
       autoNAT: autoNAT(),
-      bootstrap: bootstrap({
-        list: bootstrapList,
-      }),
+      // Bootstrap service requires at least one address — skip when list is empty.
+      // In test environments both SUBSPACE_BOOTSTRAP_ADDRS and SUBSPACE_RELAY_ADDRS
+      // are set to '' so nodes use mDNS-only peer discovery.
+      ...(bootstrapList.length > 0 ? {
+        bootstrap: bootstrap({ list: bootstrapList }),
+      } : {}),
     },
   })
 
   await node.start()
+
+  // libp2p v3 does NOT auto-dial peers discovered via mDNS — peer:discovery events
+  // only update the peer store.  Without explicit dialing, mDNS-only nodes (no
+  // bootstrap, no relay) never establish connections.
+  // Listen on the mDNS service's 'peer' event and dial immediately.
+  // libp2p v3 does NOT auto-dial peers discovered via mDNS — peer:discovery events
+  // only update the peer store.  Without explicit dialing, mDNS-only nodes never connect.
+  // Try multiple event hook points to ensure auto-dialing works:
+  //   1. mDNS service 'peer' event  (most direct)
+  //   2. node 'peer:discovery' event  (forwarded from internal components)
+  const autoDial = (id: import('@libp2p/interface').PeerId) => {
+    if (id.toString() === node.peerId.toString()) return
+    if (node.getPeers().some(p => p.toString() === id.toString())) return
+    void node.dial(id).catch(() => {})
+  }
+  // libp2p v3: auto-dial peers discovered via mDNS using their multiaddrs directly.
+  // The mDNS 'peer' event includes both peerId and multiaddrs.  Use the multiaddrs
+  // from the event (not the peer store) to avoid "no valid addresses" dial failures.
+  const mdnsService = (node.services as Record<string, unknown>)['mdns'] as
+    | { addEventListener(e: string, h: (evt: CustomEvent) => void): void }
+    | undefined
+  if (mdnsService?.addEventListener != null) {
+    mdnsService.addEventListener('peer', (evt: CustomEvent) => {
+      const peerInfo = evt.detail as {
+        id: import('@libp2p/interface').PeerId
+        multiaddrs: import('@multiformats/multiaddr').Multiaddr[]
+      }
+      if (!peerInfo?.id || peerInfo.id.toString() === node.peerId.toString()) return
+      if (node.getPeers().some(p => p.toString() === peerInfo.id.toString())) return
+      // Prefer the first dialable TCP multiaddr (loopback or specific interface).
+      // Skip 0.0.0.0 (unspecified) and :: (IPv6 any-address) — not dialable.
+      const tcpAddr = peerInfo.multiaddrs?.find(ma => {
+        const s = ma.toString()
+        return s.includes('/tcp/') &&
+               !s.includes('/ip4/0.0.0.0') &&
+               !s.includes('/ip6/::/')
+      })
+      if (tcpAddr) {
+        void node.dial(tcpAddr).catch(() => {})
+      } else {
+        void node.dial(peerInfo.id).catch(() => {})
+      }
+    })
+  }
+
+  // Fallback: listen on node-level peer:discovery for peers discovered via
+  // relay, DHT, or bootstrap (mDNS handler only fires for mDNS peers).
+  // In libp2p v3, the peer:discovery event includes multiaddrs from the peer store.
+  node.addEventListener('peer:discovery', (evt) => {
+    const peerInfo = (evt as CustomEvent<{
+      id: import('@libp2p/interface').PeerId
+      multiaddrs?: import('@multiformats/multiaddr').Multiaddr[]
+    }>).detail
+    if (!peerInfo?.id || peerInfo.id.toString() === node.peerId.toString()) return
+    if (node.getPeers().some(p => p.toString() === peerInfo.id.toString())) return
+    // Try a dialable TCP multiaddr first; fall back to peer ID dial (uses peer store)
+    const tcpAddr = peerInfo.multiaddrs?.find(ma => {
+      const s = ma.toString()
+      return s.includes('/tcp/') && !s.includes('/ip4/0.0.0.0') && !s.includes('/ip6/::/')
+    })
+    if (tcpAddr) {
+      void node.dial(tcpAddr).catch(() => {})
+    } else {
+      void node.dial(peerInfo.id).catch(() => {})
+    }
+  })
 
   // Start the connection pruner unless explicitly disabled
   let pruner: SubspaceConnectionPruner | null = null

@@ -372,6 +372,31 @@ export async function createOrbitDBContext(
   const { LevelDatastore } = await import('datastore-level')
   const path = await import('node:path')
 
+  const { unlink } = await import('node:fs/promises')
+
+  // Remove any stale LOCK files left by a previous process.
+  // When a process exits (even via SIGKILL) the OS releases fcntl advisory
+  // locks, but Level's LOCK file itself remains on disk.  Some Level versions
+  // fail to re-acquire the file lock if the file is "dirty" (non-empty).
+  // Deleting the stale LOCK file before open() allows a fresh lock to be
+  // created.  This is safe because we already waited for the old process to
+  // exit before calling joinNetwork again.
+  // Also wipe OrbitDB's internal keystore/log LOCK files.
+  const pfs = await import('node:fs/promises')
+  const pfsPath = path
+
+  async function removeLockFiles(dir: string): Promise<void> {
+    let entries
+    try { entries = await pfs.readdir(dir, { withFileTypes: true }) }
+    catch { return }
+    await Promise.all(entries.map(async (entry) => {
+      const fp = pfsPath.join(dir, entry.name)
+      if (entry.isDirectory()) return removeLockFiles(fp)
+      if (entry.name === 'LOCK') await pfs.unlink(fp).catch(() => {})
+    }))
+  }
+  await removeLockFiles(dataDir)
+
   const blockstore = new LevelBlockstore(path.join(dataDir, 'blocks'))
   const datastore = new LevelDatastore(path.join(dataDir, 'datastore'))
   // LevelDatastore must be explicitly opened before passing to Helia.

@@ -34,6 +34,7 @@ import { pipe } from 'it-pipe'
 import * as lp from 'it-length-prefixed'
 import type { Libp2p } from 'libp2p'
 import type { PeerId } from '@libp2p/interface'
+import { peerIdFromString } from '@libp2p/peer-id'
 import { BloomFilter } from './bloom.js'
 import type { IMemoryStore } from './store.js'
 import { encodeMessage, decodeMessage } from './protocol.js'
@@ -55,8 +56,14 @@ export const BROWSE_PROTOCOL = '/subspace/browse/1.0.0'
  * Serialized as JSON and published to DISCOVERY_TOPIC via GossipSub.
  */
 export interface DiscoveryManifest {
-  /** Publisher's libp2p PeerId string */
+  /** Publisher's libp2p PeerId string (PSK node peer ID) */
   peerId: string
+  /**
+   * Agent's global identity peer ID (the canonical agent:// URI peer ID).
+   * This may differ from peerId when the agent uses per-PSK derived keys.
+   * Included so peers can map GLOBAL peer IDs → PSK peer IDs for browse.
+   */
+  agentPeerId?: string
   /** Display name (from agent profile, if set) */
   displayName?: string
   /** Named collections this agent has content in */
@@ -114,6 +121,8 @@ export interface BrowseResponse {
 
 export interface PeerIndexEntry {
   peerId: string
+  /** Agent's global identity peer ID (canonical agent:// ID), may differ from peerId */
+  agentPeerId?: string
   displayName?: string
   collections: string[]
   topicBloom: BloomFilter
@@ -134,8 +143,13 @@ const PEER_STALE_MS = 5 * 60_000      // Consider peer stale after 5 minutes
 const PAGE_SIZE = 50                   // Default browse page size
 
 export interface DiscoveryManagerOptions {
-  /** Local agent PeerId */
+  /** Local agent PeerId (PSK node peer ID for PSK sessions, global for global session) */
   localPeerId: string
+  /**
+   * Agent's global identity peer ID (may differ from localPeerId when using derived PSK keys).
+   * Included in manifests so peers can map GLOBAL peer IDs → PSK peer IDs.
+   */
+  agentPeerId?: string
   /** Display name to include in manifests (optional) */
   displayName?: string
   /** Subscribed topics — trigger active fetch when matching manifests arrive */
@@ -190,19 +204,39 @@ export class DiscoveryManager {
 
     // Register browse protocol handler
     try {
-      // @ts-expect-error — libp2p stream handler type mismatch across versions
-      await this.node.handle(BROWSE_PROTOCOL, async ({ stream }: { stream: unknown }) => {
-        await this.handleBrowseRequest(stream as BrowseDuplexStream)
+      // libp2p v3: handler receives (stream, connection) as separate args, not {stream}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (this.node as any).handle(BROWSE_PROTOCOL, async (stream: unknown, _connection: unknown) => {
+        await this.handleBrowseRequest(stream)
       })
     } catch (err) {
       console.warn('[subspace] Discovery: could not register browse protocol:', err)
     }
 
-    // Broadcast initial manifest, then on interval
-    await this.broadcastManifest()
+    // Delay the first manifest broadcast to give peers time to connect and
+    // for the GossipSub mesh to form.  Subsequent broadcasts are on the
+    // interval timer.  triggerRebroadcast() from putMemory forces an early
+    // re-broadcast once the store has data.
+    const firstBroadcastDelay = 3000 // ms
+    setTimeout(() => {
+      void this.broadcastManifest()
+    }, firstBroadcastDelay)
     this.manifestTimer = setInterval(() => {
       void this.broadcastManifest()
     }, MANIFEST_INTERVAL_MS)
+  }
+
+  /**
+   * Trigger an immediate manifest re-broadcast (e.g. after new data is written).
+   * Debounced to at most once per second to avoid flooding on burst writes.
+   */
+  private rebroadcastTimer?: ReturnType<typeof setTimeout>
+  triggerRebroadcast(): void {
+    if (this.rebroadcastTimer) return
+    this.rebroadcastTimer = setTimeout(() => {
+      this.rebroadcastTimer = undefined
+      void this.broadcastManifest()
+    }, 1000)
   }
 
   /**
@@ -228,7 +262,17 @@ export class DiscoveryManager {
    */
   getKnownPeers(): PeerIndexEntry[] {
     const cutoff = Date.now() - PEER_STALE_MS
-    return [...this.peerIndex.values()].filter(p => p.lastSeen > cutoff)
+    // Deduplicate: the index may store an entry under both PSK and GLOBAL peer IDs.
+    const seen = new Set<string>()
+    const result: PeerIndexEntry[] = []
+    for (const entry of this.peerIndex.values()) {
+      if (entry.lastSeen <= cutoff) continue
+      const key = entry.peerId
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push(entry)
+    }
+    return result
   }
 
   /**
@@ -301,32 +345,54 @@ export class DiscoveryManager {
     const request: BrowseRequest = { requestId, collection, since, limit }
     const signal = AbortSignal.timeout(10_000)
 
-    // Find the PeerId object from connected peers
+    // Resolve the target peer: look up directly-connected peers first.
+    // If the caller used a GLOBAL peer ID (agentPeerId), check the peer index
+    // for a PSK peer with that agentPeerId mapping — then dial the PSK peer.
     const connectedPeers = this.node.getPeers()
-    const targetPeerId = connectedPeers.find(p => p.toString() === peerIdStr)
+    let targetPeerId: PeerId
 
-    if (!targetPeerId) {
-      throw new Error(`Peer ${peerIdStr} is not currently connected`)
+    const directMatch = connectedPeers.find(p => p.toString() === peerIdStr)
+    if (directMatch) {
+      targetPeerId = directMatch
+    } else {
+      // Try to resolve via agentPeerId → pskPeerId mapping from the peer index
+      const indexEntry = this.peerIndex.get(peerIdStr)
+      if (indexEntry) {
+        // Use the entry's peerId (PSK node peer ID) for the actual dial
+        const pskMatch = connectedPeers.find(p => p.toString() === indexEntry.peerId)
+        targetPeerId = pskMatch ?? peerIdFromString(indexEntry.peerId)
+      } else {
+        // No mapping found — try dialing directly (may work via relay/DHT)
+        targetPeerId = peerIdFromString(peerIdStr)
+      }
     }
 
     const rawStream = await this.node.dialProtocol(targetPeerId, BROWSE_PROTOCOL, { signal })
-    const stream = rawStream as unknown as BrowseDuplexStream
+    // libp2p v3 stream: read via `for await (const chunk of stream)`, write via stream.send(chunk)
+    const stream = rawStream as unknown as {
+      send(data: Uint8Array): boolean
+      close(opts?: { signal?: AbortSignal }): Promise<void>
+      [Symbol.asyncIterator](): AsyncIterator<Uint8Array>
+    }
 
     try {
-      const responseChunks: Uint8Array[] = []
+      // Write the browse request (length-prefixed)
       async function* req() { yield encodeMessage(request) }
-      await pipe(req(), (s) => lp.encode(s), stream.sink)
-      await pipe(stream.source, (s) => lp.decode(s), async (source) => {
-        for await (const chunk of source) {
-          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
-          responseChunks.push(bytes)
-          break
-        }
-      })
+      for await (const chunk of lp.encode(req())) {
+        stream.send(chunk)
+      }
+
+      // Read the browse response (length-prefixed)
+      const responseChunks: Uint8Array[] = []
+      for await (const chunk of lp.decode(stream as AsyncIterable<Uint8Array>)) {
+        const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
+        responseChunks.push(bytes)
+        break
+      }
       if (!responseChunks.length) throw new Error('No response from peer')
       return decodeMessage<BrowseResponse>(responseChunks[0])
     } finally {
-      await (stream as { close(): Promise<void> }).close().catch(() => {})
+      await stream.close().catch(() => {})
     }
   }
 
@@ -338,6 +404,7 @@ export class DiscoveryManager {
     try {
       const manifest = await this.buildManifest()
       const encoded = encodeMessage(manifest)
+      // @ts-expect-error — libp2p pubsub type varies
       // @ts-expect-error — libp2p pubsub type varies
       await this.node.services.pubsub.publish(DISCOVERY_TOPIC, encoded)
     } catch (err) {
@@ -379,6 +446,7 @@ export class DiscoveryManager {
 
     return {
       peerId: this.opts.localPeerId,
+      ...(this.opts.agentPeerId ? { agentPeerId: this.opts.agentPeerId } : {}),
       displayName: this.opts.displayName,
       collections: [...collectionsSet].sort(),
       topicBloom: topicBloom.toBase64(),
@@ -427,6 +495,7 @@ export class DiscoveryManager {
   private updatePeerIndex(manifest: DiscoveryManifest): void {
     const entry: PeerIndexEntry = {
       peerId: manifest.peerId,
+      ...(manifest.agentPeerId ? { agentPeerId: manifest.agentPeerId } : {}),
       displayName: manifest.displayName,
       collections: manifest.collections,
       topicBloom: BloomFilter.fromBase64(manifest.topicBloom),
@@ -436,6 +505,10 @@ export class DiscoveryManager {
       lastSeen: Date.now(),
     }
     this.peerIndex.set(manifest.peerId, entry)
+    // Also index by agentPeerId so browse-by-global-peer-id works
+    if (manifest.agentPeerId && manifest.agentPeerId !== manifest.peerId) {
+      this.peerIndex.set(manifest.agentPeerId, entry)
+    }
 
     // Check subscriptions
     void this.checkSubscriptions(entry)
@@ -461,16 +534,21 @@ export class DiscoveryManager {
   // Browse protocol handler (inbound)
   // ---------------------------------------------------------------------------
 
-  private async handleBrowseRequest(stream: BrowseDuplexStream): Promise<void> {
+  private async handleBrowseRequest(rawStream: unknown): Promise<void> {
+    // libp2p v3 stream: read via `for await (const chunk of stream)`, write via stream.send(chunk)
+    const stream = rawStream as {
+      send(data: Uint8Array): boolean
+      close(opts?: { signal?: AbortSignal }): Promise<void>
+      [Symbol.asyncIterator](): AsyncIterator<Uint8Array>
+    }
     try {
+      // Read the browse request (length-prefixed)
       const requestChunks: Uint8Array[] = []
-      await pipe(stream.source, (s) => lp.decode(s), async (source) => {
-        for await (const chunk of source) {
-          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
-          requestChunks.push(bytes)
-          break
-        }
-      })
+      for await (const chunk of lp.decode(stream as AsyncIterable<Uint8Array>)) {
+        const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
+        requestChunks.push(bytes)
+        break
+      }
       if (!requestChunks.length) return
 
       const req = decodeMessage<BrowseRequest>(requestChunks[0])
@@ -483,8 +561,11 @@ export class DiscoveryManager {
         hasMore: stubs.length > (req.limit ?? PAGE_SIZE),
       }
 
+      // Write the browse response (length-prefixed)
       async function* res() { yield encodeMessage(response) }
-      await pipe(res(), (s) => lp.encode(s), stream.sink)
+      for await (const chunk of lp.encode(res())) {
+        stream.send(chunk)
+      }
     } catch (err) {
       console.warn('[subspace] Browse handler error:', err)
     }

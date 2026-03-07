@@ -184,19 +184,10 @@ describe('BFS graph traversal', () => {
 
 describe('graph traversal rel filter', () => {
   it('rels filter restricts which edges are followed', async () => {
-    const A = await harness.client('alpha').putMemory({
-      type: 'pattern',
-      topic: ['rel-filter'],
-      content: 'A — has both depends-on and references links',
-      confidence: 0.9,
-    })
-
-    const B = await harness.client('alpha').putMemory({
-      type: 'pattern',
-      topic: ['rel-filter'],
-      content: 'B — reached via depends-on',
-      confidence: 0.8,
-    })
+    // Build the graph bottom-up so links point to final IDs (no supersedes chains):
+    //   A  --(depends-on)-->  B  --(depends-on)-->  D
+    //   A  --(references)-->  C
+    // Traversal with rels=['depends-on'] should reach A, B, D but NOT C.
 
     const C = await harness.client('alpha').putMemory({
       type: 'result',
@@ -212,28 +203,36 @@ describe('graph traversal rel filter', () => {
       confidence: 0.8,
     })
 
-    // Create A with links to B (depends-on) and C (references)
-    const AWithLinks = await harness.client('alpha').updateMemory(A.id, {
+    // B is created with its final link to D so no supersedes needed
+    const B = await harness.client('alpha').putMemory({
+      type: 'pattern',
+      topic: ['rel-filter'],
+      content: 'B — reached via depends-on, links to D',
+      confidence: 0.8,
+      links: [{ target: D.id, rel: 'depends-on' }],
+    })
+
+    // A is created with its final links to B and C
+    const A = await harness.client('alpha').putMemory({
+      type: 'pattern',
+      topic: ['rel-filter'],
+      content: 'A — has both depends-on (B) and references (C) links',
+      confidence: 0.9,
       links: [
         { target: B.id, rel: 'depends-on' },
         { target: C.id, rel: 'references' },
       ],
     })
 
-    // Update B with link to D (depends-on)
-    await harness.client('alpha').updateMemory(B.id, {
-      links: [{ target: D.id, rel: 'depends-on' }],
-    })
-
-    // Traverse only depends-on edges from the updated A
-    const result = await harness.client('alpha').traverseGraph(AWithLinks.id, {
+    // Traverse only depends-on edges from A
+    const result = await harness.client('alpha').traverseGraph(A.id, {
       rels: ['depends-on'],
       maxDepth: 5,
     })
 
     const nodeIds = result.nodes.map((n) => n.id)
     // Should include A (start), B (depends-on from A), D (depends-on from B)
-    expect(nodeIds).toContain(AWithLinks.id)
+    expect(nodeIds).toContain(A.id)
     expect(nodeIds).toContain(B.id)
     expect(nodeIds).toContain(D.id)
     // Should NOT include C (linked via 'references', not 'depends-on')

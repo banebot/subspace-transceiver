@@ -68,9 +68,13 @@ export function buildSiteCommand(): Command {
         const peerId = health.peerId
 
         if (!o.name && !o.description && !o.topics) {
-          // Read-only: show current profile
+          // Read-only: show current profile with agent identity
           const siteInfo = await client.getSite(peerId)
-          print(siteInfo.profile ?? { message: 'No profile published yet. Use --name to create one.' }, opts)
+          print({
+            peerId,
+            agentUri: `agent://${peerId}`,
+            profile: siteInfo.profile ?? null,
+          }, opts)
           return
         }
 

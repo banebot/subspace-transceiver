@@ -11,6 +11,9 @@ import { fileURLToPath } from 'node:url'
 import { join, dirname } from 'node:path'
 import { PID_PATH } from './config.js'
 
+// Re-export for external callers that need the default path
+export { PID_PATH }
+
 export interface PidEntry {
   pid: number
   port: number
@@ -21,28 +24,28 @@ export interface PidEntry {
 // PID file operations
 // ---------------------------------------------------------------------------
 
-export function writePid(port: number): void {
+export function writePid(port: number, pidPath: string = PID_PATH): void {
   const entry: PidEntry = {
     pid: process.pid,
     port,
     startedAt: Date.now(),
   }
-  writeFileSync(PID_PATH, JSON.stringify(entry), 'utf8')
+  writeFileSync(pidPath, JSON.stringify(entry), 'utf8')
 }
 
-export function readPid(): PidEntry | null {
+export function readPid(pidPath: string = PID_PATH): PidEntry | null {
   try {
-    if (!existsSync(PID_PATH)) return null
-    const raw = readFileSync(PID_PATH, 'utf8')
+    if (!existsSync(pidPath)) return null
+    const raw = readFileSync(pidPath, 'utf8')
     return JSON.parse(raw) as PidEntry
   } catch {
     return null
   }
 }
 
-export function clearPid(): void {
+export function clearPid(pidPath: string = PID_PATH): void {
   try {
-    unlinkSync(PID_PATH)
+    unlinkSync(pidPath)
   } catch {
     // Ignore if already gone
   }
@@ -54,9 +57,10 @@ export function clearPid(): void {
 
 /**
  * Returns true if a daemon process is currently running (PID file exists and process is alive).
+ * @param pidPath Path to the PID file (defaults to global ~/.subspace/daemon.pid)
  */
-export function isDaemonRunning(): boolean {
-  const entry = readPid()
+export function isDaemonRunning(pidPath: string = PID_PATH): boolean {
+  const entry = readPid(pidPath)
   if (!entry) return false
   try {
     // Signal 0 checks process existence without sending a real signal
@@ -64,7 +68,7 @@ export function isDaemonRunning(): boolean {
     return true
   } catch {
     // Process not found — stale PID file
-    clearPid()
+    clearPid(pidPath)
     return false
   }
 }
@@ -105,15 +109,16 @@ export async function startDaemonProcess(foreground: boolean, port: number): Pro
 /**
  * Stop the running daemon by sending SIGTERM to the PID from the PID file.
  * Returns true if the signal was sent, false if no daemon was running.
+ * @param pidPath Path to the PID file (defaults to global ~/.subspace/daemon.pid)
  */
-export function stopDaemon(): boolean {
-  const entry = readPid()
+export function stopDaemon(pidPath: string = PID_PATH): boolean {
+  const entry = readPid(pidPath)
   if (!entry) return false
   try {
     process.kill(entry.pid, 'SIGTERM')
     return true
   } catch {
-    clearPid()
+    clearPid(pidPath)
     return false
   }
 }

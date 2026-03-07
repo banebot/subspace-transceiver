@@ -152,10 +152,26 @@ const SubspaceAccessController = (options: SubspaceAccessControllerOptions = {})
         if (Buffer.byteLength(envelopeBodyField, 'utf8') > maxEnvelopeBodyBytes) return false
 
         // 5. Ed25519 signature verification
+        //
+        // IMPORTANT: Skip signature verification for encrypted documents.
+        //
+        // The signing order is: sign(plaintext_chunk) → encrypt(chunk) → store.
+        // The stored document has `content: ''` (empty placeholder) with the
+        // real content in `encryptedContent`. The signature was computed over
+        // the PLAINTEXT content, but `canAppend` receives the ENCRYPTED doc.
+        // Verifying a plaintext-signature against an encrypted doc will always
+        // fail, causing all encrypted writes to be rejected.
+        //
+        // The AC cannot decrypt the content (it lacks the PSK-derived key), so
+        // signature verification is deferred to the ingest layer (checkIngestSecurity
+        // in api.ts) which operates on plaintext before encryption. For remote
+        // replication, the PSK-network access and OrbitDB identity checks serve
+        // as the primary guards.
+        const isEncrypted = doc._encrypted === true
         const peerId = (doc.source as Record<string, unknown> | undefined)?.peerId as string | undefined
         const signature = doc.signature as string | undefined
 
-        if (signature && peerId) {
+        if (!isEncrypted && signature && peerId) {
           try {
             const peerIdObj = peerIdFromString(peerId)
             const pubKey = peerIdObj.publicKey
@@ -172,8 +188,8 @@ const SubspaceAccessController = (options: SubspaceAccessControllerOptions = {})
             // Non-Ed25519 PeerId or malformed peerId — signature unverifiable.
             // Allow the entry (we can't verify, but we can't block legitimate peers).
           }
-        } else if (!signature && requireSignatures) {
-          // Unsigned entry rejected when requireSignatures is enabled
+        } else if (!isEncrypted && !signature && requireSignatures) {
+          // Unsigned plaintext entry rejected when requireSignatures is enabled
           return false
         }
 

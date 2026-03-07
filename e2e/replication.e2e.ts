@@ -219,12 +219,14 @@ describe('update propagation', () => {
 describe('late joiner sync', () => {
   const harness = new TestHarness()
   let psk: string
+  let networkId: string
 
   beforeAll(async () => {
     await harness.startAgents(['alpha', 'beta'])
     await harness.waitForMesh(1, 45_000)
     const result = await harness.joinAllToPsk(undefined, ['alpha', 'beta'])
     psk = result.psk
+    networkId = result.networkId
   })
   afterAll(() => harness.teardown())
 
@@ -241,9 +243,10 @@ describe('late joiner sync', () => {
       })
     }
 
-    // Now start Gamma and join the same PSK
+    // Now start Gamma and join the same PSK, then explicitly wire it to Alpha/Beta
     await harness.startAgents(['gamma'])
     await harness.client('gamma').joinNetwork(psk)
+    await harness.connectPskPeers(networkId, ['alpha', 'beta', 'gamma'])
 
     // Gamma should eventually find Alpha's pre-existing chunks
     await pollUntil(
@@ -345,10 +348,11 @@ describe('replication survives Beta restart', () => {
       'Beta to see pre-restart chunk'
     )
 
-    // Restart Beta
+    // Restart Beta and rejoin the PSK network, then re-wire it to Alpha
     await harness.stopAgent('beta', 'SIGTERM')
     await harness.restartAgent('beta')
-    await harness.client('beta').joinNetwork(psk)
+    const betaRejoin = await harness.client('beta').joinNetwork(psk)
+    await harness.connectPskPeers(betaRejoin.id, ['alpha', 'beta'])
 
     // Beta's previously replicated data should still be there
     const preRestartData = await harness.client('beta').searchMemory(markerBefore)
