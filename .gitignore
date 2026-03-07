@@ -5,4 +5,9 @@ dist/
 bin/
 *.js.map
 *.d.ts.map
+# Compiled output that may land in src/ during incremental tsc --build runs
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+# TypeScript build info files
+*.tsbuildinfo
 .DS_Store
