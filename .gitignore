@@ -6,8 +6,9 @@ bin/
 *.js.map
 *.d.ts.map
 # Compiled output that may land in src/ during incremental tsc --build runs
-packages/*/src/**/*.js
-packages/*/src/**/*.d.ts
+# Excludes hand-written ambient declarations (src/types/) by using src/*.js pattern
+packages/*/src/*.js
+packages/*/src/*.d.ts
 # TypeScript build info files
 *.tsbuildinfo
 .DS_Store
