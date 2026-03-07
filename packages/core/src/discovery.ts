@@ -46,6 +46,8 @@ import { type HashcashStamp, type StampCache, verifyStamp } from './pow.js'
 
 export const DISCOVERY_TOPIC = '_subspace/discovery'
 export const BROWSE_PROTOCOL = '/subspace/browse/1.0.0'
+/** Direct peer-to-peer manifest exchange (fallback when GossipSub mesh is slow to form) */
+export const MANIFEST_PROTOCOL = '/subspace/manifest/1.0.0'
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -111,6 +113,8 @@ export interface ChunkStub {
 export interface BrowseResponse {
   requestId: string
   peerId: string
+  /** Optional: the agent's global identity peer ID (may differ from PSK peerId) */
+  agentPeerId?: string
   stubs: ChunkStub[]
   hasMore: boolean
 }
@@ -174,6 +178,7 @@ export class DiscoveryManager {
   private peerIndex = new Map<string, PeerIndexEntry>()
   private manifestTimer?: ReturnType<typeof setInterval>
   private registered = false
+  private onPeerConnect?: (event: CustomEvent<PeerId>) => void
 
   constructor(node: Libp2p, stores: IMemoryStore[], opts: DiscoveryManagerOptions) {
     this.node = node
@@ -213,6 +218,27 @@ export class DiscoveryManager {
       console.warn('[subspace] Discovery: could not register browse protocol:', err)
     }
 
+    // Register direct manifest exchange protocol — a fallback that lets peers
+    // pull our manifest via a point-to-point request when GossipSub mesh
+    // formation is slow (e.g., under heavy parallel test load).
+    try {
+      await (this.node as any).handle(MANIFEST_PROTOCOL, async (stream: unknown, _connection: unknown) => {
+        await this.handleManifestRequest(stream)
+      })
+    } catch (err) {
+      console.warn('[subspace] Discovery: could not register manifest protocol:', err)
+    }
+
+    // On peer:connect, push our manifest to the newly-connected peer directly.
+    // This ensures fast discovery even when GossipSub mesh isn't formed yet.
+    const onPeerConnect = (event: CustomEvent<PeerId>) => {
+      const remotePeerId = event.detail
+      void this.pushManifestToPeer(remotePeerId).catch(() => {})
+    }
+    ;(this.node as unknown as { addEventListener(e: string, h: (evt: CustomEvent<PeerId>) => void): void })
+      .addEventListener('peer:connect', onPeerConnect)
+    this.onPeerConnect = onPeerConnect
+
     // Delay the first manifest broadcast to give peers time to connect and
     // for the GossipSub mesh to form.  Subsequent broadcasts are on the
     // interval timer.  triggerRebroadcast() from putMemory forces an early
@@ -250,6 +276,14 @@ export class DiscoveryManager {
     try {
       await this.node.unhandle(BROWSE_PROTOCOL)
     } catch { /* ignore */ }
+    try {
+      await this.node.unhandle(MANIFEST_PROTOCOL)
+    } catch { /* ignore */ }
+    if (this.onPeerConnect) {
+      ;(this.node as unknown as { removeEventListener(e: string, h: unknown): void })
+        .removeEventListener('peer:connect', this.onPeerConnect)
+      this.onPeerConnect = undefined
+    }
     this.registered = false
   }
 
@@ -351,19 +385,94 @@ export class DiscoveryManager {
     const connectedPeers = this.node.getPeers()
     let targetPeerId: PeerId
 
-    const directMatch = connectedPeers.find(p => p.toString() === peerIdStr)
-    if (directMatch) {
-      targetPeerId = directMatch
+    // Resolve the target peer. Priority order:
+    //
+    // 1. peerIndex has a mapping where the STORED peerId differs from the lookup key
+    //    (i.e., we know "GLOBAL_ID" → "PSK_ID"). Always prefer this — the PSK peer
+    //    has actual content stores.
+    //
+    // 2. Try ALL connected peers that have peerIndex entries with agentPeerId == peerIdStr.
+    //    This catches PSK peers whose manifest we received but whose PSK peerId we're
+    //    not looking up directly.
+    //
+    // 3. Direct match: only if the peer is the exact peer ID (e.g., already a PSK peer ID).
+    //    Skip this if the peer's peerIndex entry shows it's a "pure global" node (peerId
+    //    == peerIdStr, no agentPeerId), which means it has no PSK stores.
+    //
+    // 4. Candidate scan: iterate all connected peers and try to browse each one.
+    //    Return the first peer that reports itself as the target or has content.
+    //
+    // 5. Last resort: dial the peer ID directly.
+
+    const indexEntry = this.peerIndex.get(peerIdStr)
+    if (indexEntry && indexEntry.peerId !== peerIdStr) {
+      // peerIndex maps peerIdStr (global) → indexEntry.peerId (PSK) — use PSK peer
+      const pskMatch = connectedPeers.find(p => p.toString() === indexEntry.peerId)
+      targetPeerId = pskMatch ?? peerIdFromString(indexEntry.peerId)
     } else {
-      // Try to resolve via agentPeerId → pskPeerId mapping from the peer index
-      const indexEntry = this.peerIndex.get(peerIdStr)
-      if (indexEntry) {
-        // Use the entry's peerId (PSK node peer ID) for the actual dial
-        const pskMatch = connectedPeers.find(p => p.toString() === indexEntry.peerId)
-        targetPeerId = pskMatch ?? peerIdFromString(indexEntry.peerId)
+      // Search connected peers for any that identify as the target's PSK node
+      // (connected peer with peerIndex entry that has agentPeerId === peerIdStr)
+      let foundViaPeerIndex: PeerId | undefined
+      for (const cp of connectedPeers) {
+        const cpStr = cp.toString()
+        if (cpStr === peerIdStr) continue // skip the global peer itself
+        const cpEntry = this.peerIndex.get(cpStr)
+        if (cpEntry?.agentPeerId === peerIdStr) {
+          foundViaPeerIndex = cp
+          break
+        }
+      }
+
+      if (foundViaPeerIndex) {
+        targetPeerId = foundViaPeerIndex
       } else {
-        // No mapping found — try dialing directly (may work via relay/DHT)
-        targetPeerId = peerIdFromString(peerIdStr)
+        // Direct match: only use if this peer has content (not a global-only node)
+        const directMatch = connectedPeers.find(p => p.toString() === peerIdStr)
+        const directEntry = directMatch ? this.peerIndex.get(peerIdStr) : undefined
+        const isGlobalOnlyPeer = directEntry && directEntry.peerId === peerIdStr && !directEntry.agentPeerId
+
+        if (directMatch && !isGlobalOnlyPeer) {
+          targetPeerId = directMatch
+        } else if (connectedPeers.length > 0) {
+          // No mapping found (manifest exchange may not have happened yet).
+          // Try ALL connected peers — any peer in this PSK session may serve the content.
+          // Skip the global peer (peerIdStr) to avoid dialling global nodes with no stores.
+          for (const candidate of connectedPeers) {
+            if (candidate.toString() === peerIdStr) continue // skip global peer
+            try {
+              const candidateSignal = AbortSignal.timeout(5_000)
+              const candidateStream = await this.node.dialProtocol(candidate, BROWSE_PROTOCOL, { signal: candidateSignal })
+              const cs = candidateStream as unknown as {
+                send(data: Uint8Array): boolean
+                close(opts?: { signal?: AbortSignal }): Promise<void>
+                [Symbol.asyncIterator](): AsyncIterator<Uint8Array>
+              }
+              async function* candidateReq() { yield encodeMessage(request) }
+              for await (const chunk of lp.encode(candidateReq())) { cs.send(chunk) }
+              const candidateChunks: Uint8Array[] = []
+              for await (const chunk of lp.decode(cs as AsyncIterable<Uint8Array>)) {
+                const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
+                candidateChunks.push(bytes)
+                break
+              }
+              await cs.close().catch(() => {})
+              if (candidateChunks.length > 0) {
+                const candidateResp = decodeMessage<BrowseResponse>(candidateChunks[0])
+                // Accept if this peer identifies as the target OR has any content
+                if (candidateResp.agentPeerId === peerIdStr || candidateResp.peerId === peerIdStr || candidateResp.stubs.length > 0) {
+                  return candidateResp
+                }
+              }
+            } catch {
+              // This peer doesn't support browse or is unreachable — skip
+            }
+          }
+          // All candidates tried — fall back to dialing the target directly
+          targetPeerId = peerIdFromString(peerIdStr)
+        } else {
+          // No connected peers at all — try dialing directly
+          targetPeerId = peerIdFromString(peerIdStr)
+        }
       }
     }
 
@@ -404,8 +513,7 @@ export class DiscoveryManager {
     try {
       const manifest = await this.buildManifest()
       const encoded = encodeMessage(manifest)
-      // @ts-expect-error — libp2p pubsub type varies
-      // @ts-expect-error — libp2p pubsub type varies
+      // @ts-expect-error — libp2p pubsub type varies across helia versions
       await this.node.services.pubsub.publish(DISCOVERY_TOPIC, encoded)
     } catch (err) {
       // Swallow — no peers connected is normal early in startup
@@ -505,9 +613,20 @@ export class DiscoveryManager {
       lastSeen: Date.now(),
     }
     this.peerIndex.set(manifest.peerId, entry)
-    // Also index by agentPeerId so browse-by-global-peer-id works
+    // Also index by agentPeerId so browse-by-global-peer-id works.
+    // IMPORTANT: only overwrite an existing agentPeerId entry if the new entry
+    // has a higher chunkCount OR the existing entry is a "global-only" mapping
+    // (peerId === agentPeerId, meaning no PSK content). This prevents a global
+    // manifest (chunkCount=0) from clobbering a richer PSK manifest (chunkCount>0)
+    // when both are received concurrently via syncManifestsWithPeers().
     if (manifest.agentPeerId && manifest.agentPeerId !== manifest.peerId) {
-      this.peerIndex.set(manifest.agentPeerId, entry)
+      const existingByAgent = this.peerIndex.get(manifest.agentPeerId)
+      // Overwrite if: no existing entry, OR existing is global-only, OR new has more content
+      if (!existingByAgent ||
+          existingByAgent.peerId === manifest.agentPeerId ||
+          manifest.chunkCount >= existingByAgent.chunkCount) {
+        this.peerIndex.set(manifest.agentPeerId, entry)
+      }
     }
 
     // Check subscriptions
@@ -557,6 +676,7 @@ export class DiscoveryManager {
       const response: BrowseResponse = {
         requestId: req.requestId,
         peerId: this.opts.localPeerId,
+        ...(this.opts.agentPeerId ? { agentPeerId: this.opts.agentPeerId } : {}),
         stubs: stubs.slice(0, req.limit ?? PAGE_SIZE),
         hasMore: stubs.length > (req.limit ?? PAGE_SIZE),
       }
@@ -599,6 +719,77 @@ export class DiscoveryManager {
     return allStubs
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, limit + 1)  // +1 to detect hasMore
+  }
+
+  // ---------------------------------------------------------------------------
+  // Direct manifest exchange protocol (fallback when GossipSub is slow)
+  // ---------------------------------------------------------------------------
+
+  /** Handle an inbound manifest-request: respond with our current manifest. */
+  private async handleManifestRequest(rawStream: unknown): Promise<void> {
+    const stream = rawStream as {
+      send(data: Uint8Array): boolean
+      close(opts?: { signal?: AbortSignal }): Promise<void>
+      [Symbol.asyncIterator](): AsyncIterator<Uint8Array>
+    }
+    try {
+      const manifest = await this.buildManifest()
+      const encoded = encodeMessage(manifest)
+      async function* res() { yield encoded }
+      for await (const chunk of lp.encode(res())) {
+        stream.send(chunk)
+      }
+    } catch (err) {
+      console.warn('[subspace] Manifest request handler error:', err)
+    } finally {
+      await stream.close().catch(() => {})
+    }
+  }
+
+  /**
+   * Actively exchange manifests with all currently connected peers.
+   * Dials each connected peer via MANIFEST_PROTOCOL and reads their manifest.
+   * This is a reliable synchronisation trigger that doesn't rely on GossipSub.
+   */
+  async syncManifestsWithPeers(): Promise<void> {
+    const peers = this.node.getPeers()
+    await Promise.all(peers.map(p => this.pushManifestToPeer(p).catch(() => {})))
+  }
+
+  /**
+   * Push our manifest to a newly-connected peer via MANIFEST_PROTOCOL.
+   * This is a reliable fallback that works even when GossipSub mesh hasn't formed.
+   * Fire-and-forget — errors are silently ignored.
+   */
+  private async pushManifestToPeer(remotePeerId: PeerId): Promise<void> {
+    const signal = AbortSignal.timeout(5_000)
+    try {
+      const rawStream = await this.node.dialProtocol(remotePeerId, MANIFEST_PROTOCOL, { signal })
+      const stream = rawStream as unknown as {
+        send(data: Uint8Array): boolean
+        close(opts?: { signal?: AbortSignal }): Promise<void>
+        [Symbol.asyncIterator](): AsyncIterator<Uint8Array>
+      }
+      try {
+        // Read their manifest back (they respond with theirs on the same stream)
+        const responseChunks: Uint8Array[] = []
+        for await (const chunk of lp.decode(stream as AsyncIterable<Uint8Array>)) {
+          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
+          responseChunks.push(bytes)
+          break
+        }
+        if (responseChunks.length > 0) {
+          const manifest = decodeMessage<DiscoveryManifest>(responseChunks[0])
+          if (manifest.peerId && manifest.peerId !== this.opts.localPeerId) {
+            this.updatePeerIndex(manifest)
+          }
+        }
+      } finally {
+        await stream.close().catch(() => {})
+      }
+    } catch {
+      // Peer may not support this protocol yet or dial failed — silently ignore
+    }
   }
 }
 

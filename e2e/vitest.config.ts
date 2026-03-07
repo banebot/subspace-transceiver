@@ -10,10 +10,14 @@ export default defineConfig({
     // Each test file gets its own process — no shared state between files.
     pool: 'forks',
     // Limit parallel workers: each test file spawns 2-4 daemon processes.
-    // With 10 test files and 8 cores, all running simultaneously would create
-    // 20-30 daemons — exhausting ports, memory, and mDNS capacity.
-    // Cap at 4 to keep daemon count ≤ 12 for reliable test execution.
-    maxForks: 4,
+    // Cap at 2 workers — reduces daemon count from 20-30 to 4-8 for more reliable
+    // GossipSub delivery, latency tests, and rate-limit windows.
+    maxForks: 2,
+    // Run test suites within each file one at a time (no concurrent describe blocks)
+    maxConcurrency: 1,
+    // Run test files one at a time to prevent port conflicts and resource exhaustion.
+    // --no-file-parallelism CLI flag or fileParallelism:false config option.
+    fileParallelism: false,
     // Serial execution within each file — no shared state between tests.
     maxConcurrency: 1,
     // Show test names as they run (useful for long-running tests)

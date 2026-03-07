@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "node patches/gossipsub-multiaddr-compat.js && node patches/gossipsub-stream-compat.js && node patches/gossipsub-handler-compat.js",
+    "postinstall": "node patches/gossipsub-multiaddr-compat.js && node patches/gossipsub-stream-compat.js && node patches/gossipsub-handler-compat.js && node patches/orbitdb-sync-compat.js",
     "build": "npm run build -w packages/core && npm run build -w packages/daemon && npm run build -w packages/cli",
     "test": "vitest run --reporter=verbose",
     "test:watch": "vitest --reporter=verbose",

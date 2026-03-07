@@ -18,6 +18,8 @@ import { buildNetworkCommand } from './commands/network.js'
 import { buildMemoryCommand } from './commands/memory.js'
 import { buildSiteCommand } from './commands/site.js'
 import { buildDiscoverCommand, buildBrowseCommand, buildSecurityCommand } from './commands/discover.js'
+import { buildMailCommand } from './commands/mail.js'
+import { buildSchemaCommand } from './commands/schema.js'
 
 const program = new Command()
 
@@ -42,6 +44,12 @@ program.addCommand(buildBrowseCommand())
 
 // Security diagnostics (TODO-ebb16396)
 program.addCommand(buildSecurityCommand())
+
+// Mail — store-and-forward messaging
+program.addCommand(buildMailCommand())
+
+// Schema — Lexicon Protocol Registry
+program.addCommand(buildSchemaCommand())
 
 // Global unhandled rejection handler
 process.on('unhandledRejection', (reason) => {

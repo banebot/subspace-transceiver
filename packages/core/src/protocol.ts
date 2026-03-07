@@ -32,6 +32,13 @@ export interface QueryRequest {
   requestId: string
   /** Proof-of-work stamp (optional, required when remote enforces requirePoW) */
   pow?: HashcashStamp
+  /**
+   * Network ID of the requesting peer's PSK session (SHA-256 of PSK).
+   * The query handler rejects requests from peers on different networks,
+   * enforcing PSK isolation at the application layer even when two PSK
+   * nodes accidentally connect to each other (e.g. via mDNS on the same LAN).
+   */
+  networkId?: string
 }
 
 export interface QueryResponse {
@@ -108,9 +115,10 @@ export async function sendQuery(
   peerId: PeerId,
   query: MemoryQuery,
   pow?: HashcashStamp,
+  networkId?: string,
 ): Promise<QueryResponse> {
   const requestId = crypto.randomUUID()
-  const request: QueryRequest = { query, requestId, ...(pow ? { pow } : {}) }
+  const request: QueryRequest = { query, requestId, ...(pow ? { pow } : {}), ...(networkId ? { networkId } : {}) }
   const timeoutSignal = AbortSignal.timeout(5000)
 
   let rawStream: Awaited<ReturnType<typeof node.dialProtocol>>

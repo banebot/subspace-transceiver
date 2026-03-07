@@ -26,6 +26,11 @@ import {
   StampCache,
   type EpochManager,
   RELAY_ADDRESSES,
+  registerMailboxProtocol,
+  createFileMailStores,
+  pollMail,
+  createFileRegistry,
+  type ISchemaRegistry,
 } from '@subspace-net/core'
 import {
   loadConfig,
@@ -223,6 +228,32 @@ async function main() {
     globalSession = null
   }
 
+  // ---------------------------------------------------------------------------
+  // Initialize schema registry
+  // ---------------------------------------------------------------------------
+  let schemaRegistry: ISchemaRegistry | undefined
+  try {
+    const { join } = await import('node:path')
+    const schemaCacheDir = join(config.dataDir, 'schemas')
+    schemaRegistry = await createFileRegistry(schemaCacheDir)
+    console.log('[subspace] Schema registry initialized.')
+  } catch (err) {
+    console.warn('[subspace] WARNING: Could not initialize schema registry:', err)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Initialize mail stores (if mailbox is enabled)
+  // ---------------------------------------------------------------------------
+  let mailStores: Awaited<ReturnType<typeof createFileMailStores>> | undefined
+  if (config.mailbox.enabled) {
+    try {
+      mailStores = await createFileMailStores(config.dataDir)
+      console.log('[subspace] Mailbox initialized.')
+    } catch (err) {
+      console.warn('[subspace] WARNING: Could not initialize mail stores:', err)
+    }
+  }
+
   // State shared with the API
   const state: DaemonState = {
     config,
@@ -237,6 +268,8 @@ async function main() {
     }),
     reputation: new ReputationStore(),
     stampCache: new StampCache(),
+    mailStores,
+    schemaRegistry,
   }
 
   // ---------------------------------------------------------------------------
@@ -300,6 +333,52 @@ async function main() {
   writePid(config.port, pidPath)
 
   // ---------------------------------------------------------------------------
+  // Register mailbox protocol + start mail poller
+  // ---------------------------------------------------------------------------
+  let mailPollHandle: ReturnType<typeof setInterval> | null = null
+  if (config.mailbox.enabled && mailStores) {
+    // Register the mailbox libp2p protocol on the global node
+    const mailNode = state.globalSession?.node ?? [...sessions.values()][0]?.node
+    if (mailNode) {
+      try {
+        await registerMailboxProtocol(mailNode, {
+          relayStore: mailStores.relay,
+          inboxStore: mailStores.inbox,
+          recipientPeerId: identity.peerId,
+          recipientKey: identity.privateKey,
+          autoDecrypt: true,
+          maxCheckResults: 50,
+        })
+        console.log('[subspace] Mailbox protocol registered.')
+      } catch (err) {
+        console.warn('[subspace] Could not register mailbox protocol:', err)
+      }
+
+      // Poll for pending mail on startup and periodically
+      const doPoll = async () => {
+        const relayPeers = [
+          ...(state.globalSession?.node.getPeers() ?? []),
+          ...[...sessions.values()].flatMap(s => s.node.getPeers()),
+        ]
+        if (relayPeers.length > 0 && mailStores) {
+          const newMail = await pollMail(mailNode, relayPeers, {
+            recipientPeerId: identity.peerId,
+            recipientKey: identity.privateKey,
+            inboxStore: mailStores.inbox,
+          })
+          if (newMail > 0) {
+            console.log(`[subspace] Received ${newMail} new mail message(s).`)
+          }
+        }
+      }
+
+      // Initial poll after 5s (let mesh form first)
+      setTimeout(() => doPoll().catch(() => {}), 5_000)
+      mailPollHandle = setInterval(() => doPoll().catch(() => {}), config.mailbox.pollIntervalMs)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Start GC + epoch rotation scheduler
   // ---------------------------------------------------------------------------
   const gcHandle = startGCScheduler(
@@ -342,6 +421,7 @@ async function main() {
     console.log(`\n[subspace] Received ${signal}, shutting down…`)
     clearInterval(gcHandle)
     clearInterval(diversityHandle)
+    if (mailPollHandle) clearInterval(mailPollHandle)
 
     // Leave all PSK networks first
     for (const session of sessions.values()) {

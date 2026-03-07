@@ -178,6 +178,33 @@ export interface EpochConfig {
   migrationLeadTimeMs: number
 }
 
+/**
+ * Mailbox configuration — store-and-forward messaging for offline agents.
+ */
+export interface MailboxConfig {
+  /** If true, the daemon accepts mail for itself and relays for others. Default: true. */
+  enabled: boolean
+  /** If true, hold envelopes for offline recipients. Default: true. */
+  relayEnabled: boolean
+  /** Maximum total relay storage in MB. Default: 100. */
+  maxStorageMB: number
+  /** Default envelope TTL in seconds. Default: 604800 (7 days). */
+  defaultTTLSeconds: number
+  /** Max envelopes per recipient. Default: 1000. */
+  maxEnvelopesPerRecipient: number
+  /** Poll interval for pending mail in ms. Default: 60000. */
+  pollIntervalMs: number
+}
+
+export const DEFAULT_MAILBOX_CONFIG: MailboxConfig = {
+  enabled: true,
+  relayEnabled: true,
+  maxStorageMB: 100,
+  defaultTTLSeconds: 604800,
+  maxEnvelopesPerRecipient: 1000,
+  pollIntervalMs: 60_000,
+}
+
 export const DEFAULT_EPOCH_CONFIG: EpochConfig = {
   epochDurationMs: 604_800_000,  // 7 days
   retainEpochs: 1,
@@ -201,6 +228,10 @@ export interface DaemonConfig {
    * tombstones that would otherwise accumulate forever.
    */
   epochs: EpochConfig
+  /**
+   * Mailbox configuration — store-and-forward messaging for offline agents.
+   */
+  mailbox: MailboxConfig
   /**
    * Circuit relay v2 multiaddrs for NAT traversal.
    *
@@ -245,6 +276,7 @@ const DEFAULTS: DaemonConfig = {
   security: DEFAULT_SECURITY,
   subscriptions: { topics: [], peers: [] },
   epochs: DEFAULT_EPOCH_CONFIG,
+  mailbox: DEFAULT_MAILBOX_CONFIG,
   relayAddresses: [],
 }
 
@@ -308,6 +340,10 @@ export async function loadConfig(): Promise<DaemonConfig> {
       ...(process.env.SUBSPACE_EPOCH_DURATION_MS
         ? { epochDurationMs: parseInt(process.env.SUBSPACE_EPOCH_DURATION_MS, 10) }
         : {}),
+    },
+    mailbox: {
+      ...DEFAULT_MAILBOX_CONFIG,
+      ...(fileConfig.mailbox ?? {}),
     },
     // SUBSPACE_RELAY_ADDRS="" disables relay (empty string → empty array)
     // SUBSPACE_RELAY_ADDRS="addr1,addr2" overrides built-in relay list

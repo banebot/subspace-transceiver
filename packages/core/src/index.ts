@@ -161,6 +161,77 @@ export type { CreateNodeOptions, LibP2pNodeWithPruner } from './node.js'
 export { SubspaceConnectionPruner } from './connection-pruner.js'
 export type { ConnectionPrunerOptions } from './connection-pruner.js'
 
+// Lexicon Protocol Registry — AT Protocol-inspired schema system
+export {
+  isValidNSID,
+  parseNSID,
+  nsidMatches,
+  memoryTypeToNSID,
+  nsidToMemoryType,
+  BUILT_IN_NSIDS,
+} from './nsid.js'
+export type { ParsedNSID, BuiltInMemoryType } from './nsid.js'
+
+export {
+  validateLexiconSchema,
+  validateRecordData,
+  BUILT_IN_SCHEMAS,
+} from './lexicon.js'
+export type {
+  LexiconSchema,
+  FieldSchema,
+  FieldType,
+  RecordDefinition,
+  ValidationResult as LexiconValidationResult,
+} from './lexicon.js'
+
+export {
+  InMemorySchemaRegistry,
+  FileSchemaRegistry,
+  getDefaultRegistry,
+  createFileRegistry,
+  parseLexiconSchema,
+  findSchemasByPattern,
+} from './schema-registry.js'
+export type { ISchemaRegistry, ValidationResult as SchemaValidationResult } from './schema-registry.js'
+
+// Mail — store-and-forward messaging for offline agents
+export {
+  MAILBOX_PROTOCOL,
+  encryptMailPayload,
+  decryptMailEnvelope,
+  signEnvelope,
+  verifyEnvelopeSignature,
+  createEnvelope,
+  isEnvelopeExpired,
+} from './mail.js'
+export type {
+  MailEnvelope,
+  MailPayload,
+  MailMessage,
+  InboxMessage,
+  OutboxMessage,
+} from './mail.js'
+
+export {
+  MemoryRelayStore,
+  MemoryInboxStore,
+  MemoryOutboxStore,
+  FileRelayStore,
+  FileInboxStore,
+  FileOutboxStore,
+  createFileMailStores,
+  mailStoreExists,
+} from './mail-store.js'
+export type { IRelayStore, IInboxStore, IOutboxStore } from './mail-store.js'
+
+export {
+  registerMailboxProtocol,
+  sendMail,
+  pollMail,
+} from './mail-protocol.js'
+export type { MailboxHandlerOptions, SendMailOptions } from './mail-protocol.js'
+
 // Hashcash proof-of-work (TODO-4e34c409)
 export {
   mineStamp,

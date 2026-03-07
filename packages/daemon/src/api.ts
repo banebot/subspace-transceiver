@@ -31,6 +31,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { v4 as uuidv4 } from 'uuid'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { saveConfig, type DaemonConfig } from './config.js'
+import type { IRelayStore, IInboxStore, IOutboxStore, ISchemaRegistry } from '@subspace-net/core'
 import {
   joinNetwork,
   leaveNetwork,
@@ -95,6 +96,14 @@ export interface DaemonState {
   reputation: ReputationStore
   /** Proof-of-work stamp cache — avoids re-mining every request */
   stampCache: StampCache
+  /** Mail stores — relay, inbox, outbox. Null when mailbox is disabled. */
+  mailStores?: {
+    relay: IRelayStore
+    inbox: IInboxStore
+    outbox: IOutboxStore
+  }
+  /** Schema registry for Lexicon Protocol. */
+  schemaRegistry?: ISchemaRegistry
 }
 
 // Typed duplex for protocol handler
@@ -726,7 +735,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
 
       console.log(`[subspace:search] PSK session ${session.id.slice(0,8)}: allPeers=${allPeers.length} targetPeers=${targetPeers.length}`)
       const responses = await Promise.allSettled(
-        targetPeers.map((peerId) => sendQuery(session.node, peerId, queryOp, queryPow))
+        targetPeers.map((peerId) => sendQuery(session.node, peerId, queryOp, queryPow, session.id))
       )
       for (const r of responses) {
         if (r.status === 'rejected') {
@@ -859,7 +868,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
         const peers = session.node.getPeers()
         for (const peer of peers) {
           try {
-            const resp = await sendQuery(session.node, peer, q)
+            const resp = await sendQuery(session.node, peer, q, undefined, session.id)
             const match = resp.chunks.find(c =>
               c.source.peerId === parsed.peerId &&
               c.collection === parsed.collection &&
@@ -991,6 +1000,24 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     if (state.globalSession) addEntries(state.globalSession.discovery)
 
     return reply.send(peers)
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /discovery/rebroadcast — force-rebroadcast manifests on all sessions
+  // Useful in tests and debugging to ensure peers exchange discovery manifests
+  // without waiting for the periodic broadcast interval.
+  // ---------------------------------------------------------------------------
+  app.post('/discovery/rebroadcast', async (_req, reply) => {
+    // Trigger GossipSub re-broadcast on all sessions
+    for (const session of state.sessions.values()) {
+      session.discovery.triggerRebroadcast()
+    }
+    if (state.globalSession) state.globalSession.discovery.triggerRebroadcast()
+    // Also pull manifests directly from connected PSK peers (reliable fallback)
+    await Promise.all(
+      [...state.sessions.values()].map(s => s.discovery.syncManifestsWithPeers().catch(() => {}))
+    )
+    return reply.status(204).send()
   })
 
   // ---------------------------------------------------------------------------
@@ -1168,6 +1195,161 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     }
   })
 
+  // ---------------------------------------------------------------------------
+  // Mail API endpoints — store-and-forward messaging
+  // ---------------------------------------------------------------------------
+
+  // POST /mail/send — send a message to another agent by PeerId
+  app.post('/mail/send', async (req, reply) => {
+    if (!state.mailStores) {
+      return reply.status(503).send({ error: 'Mailbox is disabled', code: 'MAILBOX_DISABLED' })
+    }
+    const body = req.body as {
+      to?: string
+      subject?: string
+      body?: string
+      mimeType?: string
+      meta?: Record<string, unknown>
+      contentType?: string
+      ttl?: number
+    }
+    if (!body.to) return reply.status(400).send({ error: '"to" (recipient PeerId) is required', code: 'INVALID_REQUEST' })
+    if (!body.body) return reply.status(400).send({ error: '"body" (message text) is required', code: 'INVALID_REQUEST' })
+
+    let recipientPeer: ReturnType<typeof peerIdFromString>
+    try {
+      recipientPeer = peerIdFromString(body.to)
+    } catch {
+      return reply.status(400).send({ error: `Invalid PeerId: ${body.to}`, code: 'INVALID_REQUEST' })
+    }
+
+    const { sendMail: sendMailFn } = await import('@subspace-net/core')
+
+    // Collect relay peers from all PSK sessions
+    const relayPeers = [...state.sessions.values()].flatMap(s => s.node.getPeers())
+
+    // Also try global session peers
+    if (state.globalSession) {
+      relayPeers.push(...state.globalSession.node.getPeers())
+    }
+
+    // Choose the node to send from (prefer global session, fall back to first PSK session)
+    const sendNode = state.globalSession?.node ?? [...state.sessions.values()][0]?.node
+    if (!sendNode) {
+      return reply.status(503).send({ error: 'No network connection available', code: 'NO_NETWORK' })
+    }
+
+    try {
+      const mode = await sendMailFn(sendNode, recipientPeer, {
+        senderKey: state.agentPrivateKey,
+        senderPeerId: state.getPeerId(),
+        recipientPeerId: body.to,
+        payload: {
+          subject: body.subject,
+          body: body.body,
+          mimeType: body.mimeType ?? 'text/plain',
+          meta: body.meta,
+        },
+        ttl: body.ttl ?? state.config.mailbox.defaultTTLSeconds,
+        contentType: body.contentType,
+        relayPeers,
+        outboxStore: state.mailStores.outbox,
+      })
+      return reply.status(201).send({ ok: true, mode })
+    } catch (err) {
+      return reply.status(500).send({ error: String(err), code: 'MAIL_SEND_FAILED' })
+    }
+  })
+
+  // GET /mail/inbox — list all received messages
+  app.get('/mail/inbox', async (_req, reply) => {
+    if (!state.mailStores) {
+      return reply.status(503).send({ error: 'Mailbox is disabled', code: 'MAILBOX_DISABLED' })
+    }
+    const messages = await state.mailStores.inbox.list()
+    return reply.send(messages)
+  })
+
+  // GET /mail/inbox/:id — get a specific inbox message
+  app.get('/mail/inbox/:id', async (req, reply) => {
+    if (!state.mailStores) {
+      return reply.status(503).send({ error: 'Mailbox is disabled', code: 'MAILBOX_DISABLED' })
+    }
+    const { id } = req.params as { id: string }
+    const msg = await state.mailStores.inbox.get(id)
+    if (!msg) return reply.status(404).send({ error: 'Message not found', code: 'NOT_FOUND' })
+    return reply.send(msg)
+  })
+
+  // DELETE /mail/inbox/:id — delete an inbox message
+  app.delete('/mail/inbox/:id', async (req, reply) => {
+    if (!state.mailStores) {
+      return reply.status(503).send({ error: 'Mailbox is disabled', code: 'MAILBOX_DISABLED' })
+    }
+    const { id } = req.params as { id: string }
+    const deleted = await state.mailStores.inbox.delete(id)
+    if (!deleted) return reply.status(404).send({ error: 'Message not found', code: 'NOT_FOUND' })
+    return reply.status(204).send()
+  })
+
+  // GET /mail/outbox — list sent messages
+  app.get('/mail/outbox', async (_req, reply) => {
+    if (!state.mailStores) {
+      return reply.status(503).send({ error: 'Mailbox is disabled', code: 'MAILBOX_DISABLED' })
+    }
+    const messages = await state.mailStores.outbox.list()
+    return reply.send(messages)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Schema Registry API — Lexicon Protocol Registry
+  // ---------------------------------------------------------------------------
+
+  // GET /schemas — list all known schemas
+  app.get('/schemas', async (_req, reply) => {
+    if (!state.schemaRegistry) {
+      const { getDefaultRegistry } = await import('@subspace-net/core')
+      return reply.send(getDefaultRegistry().list())
+    }
+    return reply.send(state.schemaRegistry.list())
+  })
+
+  // GET /schemas/:nsid — get a specific schema
+  app.get('/schemas/:nsid', async (req, reply) => {
+    const { nsid } = req.params as { nsid: string }
+    const registry = state.schemaRegistry ?? (await import('@subspace-net/core')).getDefaultRegistry()
+    const schema = await registry.resolve(nsid)
+    if (!schema) return reply.status(404).send({ error: `Schema not found: ${nsid}`, code: 'NOT_FOUND' })
+    return reply.send(schema)
+  })
+
+  // POST /schemas — register a new schema
+  app.post('/schemas', async (req, reply) => {
+    const { parseLexiconSchema } = await import('@subspace-net/core')
+    try {
+      const schema = parseLexiconSchema(JSON.stringify(req.body))
+      const registry = state.schemaRegistry ?? (await import('@subspace-net/core')).getDefaultRegistry()
+      registry.register(schema)
+      return reply.status(201).send(schema)
+    } catch (err) {
+      return reply.status(400).send({ error: String(err), code: 'INVALID_SCHEMA' })
+    }
+  })
+
+  // POST /schemas/validate — validate record data against a schema
+  app.post('/schemas/validate', async (req, reply) => {
+    const body = req.body as { nsid?: string; data?: unknown }
+    if (!body.nsid || !body.data) {
+      return reply.status(400).send({ error: 'nsid and data are required', code: 'INVALID_REQUEST' })
+    }
+    if (typeof body.data !== 'object' || body.data === null) {
+      return reply.status(400).send({ error: 'data must be an object', code: 'INVALID_REQUEST' })
+    }
+    const registry = state.schemaRegistry ?? (await import('@subspace-net/core')).getDefaultRegistry()
+    const result = await registry.validateRecord(body.nsid, body.data as Record<string, unknown>)
+    return reply.send(result)
+  })
+
   return app
 }
 
@@ -1226,7 +1408,17 @@ export function registerQueryProtocol(session: NetworkSession, state: DaemonStat
         }
         if (requestChunks.length === 0) return
 
-        const req = decodeMessage<{ query: MemoryQuery; requestId: string }>(requestChunks[0])
+        const req = decodeMessage<{ query: MemoryQuery; requestId: string; networkId?: string }>(requestChunks[0])
+
+        // Enforce PSK isolation: if the requesting peer specifies a networkId and it
+        // doesn't match this session's network, return empty results. This prevents
+        // cross-PSK data leakage when two PSK nodes accidentally connect (e.g. via mDNS).
+        if (req.networkId && req.networkId !== session.id) {
+          const response = { requestId: req.requestId, chunks: [] as MemoryChunk[], peerId: session.node.peerId.toString() }
+          async function* emptySource() { yield encodeMessage(response) }
+          for await (const chunk of lp.encode(emptySource())) { s.send(chunk) }
+          return
+        }
 
         const results: MemoryChunk[] = []
         for (const store of [session.stores.skill, session.stores.project]) {

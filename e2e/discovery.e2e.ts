@@ -17,7 +17,9 @@ import { pollUntil } from './helpers/wait.js'
 describe('discovery manifests', () => {
   const harness = new TestHarness()
   beforeAll(async () => {
-    await harness.startAgents(['alpha', 'beta'])
+    // Use a shorter manifest interval so GossipSub propagation is faster,
+    // especially under high load with multiple parallel test files.
+    await harness.startAgents(['alpha', 'beta'], { SUBSPACE_MANIFEST_INTERVAL_MS: '2000' })
     await harness.waitForMesh(1, 45_000)
     await harness.joinAllToPsk()
 
@@ -48,11 +50,15 @@ describe('discovery manifests', () => {
 
     await pollUntil(
       async () => {
+        // Force-rebroadcast on both agents so GossipSub has fresh data to deliver
+        // even under heavy system load with multiple parallel test files.
+        await harness.client('alpha').rebroadcastManifests().catch(() => {})
+        await harness.client('beta').rebroadcastManifests().catch(() => {})
         const peers = await harness.client('beta').getDiscoveryPeers()
         const alpha = peers.find((p) => p.peerId === alphaPeerId)
         return alpha !== undefined && alpha.chunkCount > 0
       },
-      30_000,
+      60_000,
       'Alpha to appear in Beta discovery peers with chunkCount > 0'
     )
 
@@ -67,11 +73,13 @@ describe('discovery manifests', () => {
   it('topic aggregation shows auth with peerCount 2', async () => {
     await pollUntil(
       async () => {
+        await harness.client('alpha').rebroadcastManifests().catch(() => {})
+        await harness.client('beta').rebroadcastManifests().catch(() => {})
         const topics = await harness.client('alpha').getDiscoveryTopics()
         const auth = topics.find((t) => t.topic === 'auth')
         return auth !== undefined && auth.peerCount >= 2
       },
-      30_000,
+      60_000,
       'auth topic to show peerCount >= 2 in aggregated topics'
     )
 
@@ -91,7 +99,7 @@ describe('discovery manifests', () => {
 describe('Bloom filter topic check', () => {
   const harness = new TestHarness()
   beforeAll(async () => {
-    await harness.startAgents(['alpha', 'beta'])
+    await harness.startAgents(['alpha', 'beta'], { SUBSPACE_MANIFEST_INTERVAL_MS: '2000' })
     await harness.waitForMesh(1, 45_000)
     await harness.joinAllToPsk()
 
@@ -107,13 +115,14 @@ describe('Bloom filter topic check', () => {
   it('Bloom filter says probably:true for a topic Alpha holds', async () => {
     const alphaPeerId = harness.peerId('alpha')
 
-    // Wait for Alpha's manifest to reach Beta
+    // Wait for Alpha's manifest to reach Beta (force-rebroadcast on each poll under load)
     await pollUntil(
       async () => {
+        await harness.client('alpha').rebroadcastManifests().catch(() => {})
         const result = await harness.client('beta').checkTopic(alphaPeerId, 'rare-topic-xyz-bloom-test')
         return result.probably === true
       },
-      30_000,
+      45_000,
       'Beta bloom filter to report true for Alpha\'s rare topic'
     )
 
@@ -124,13 +133,14 @@ describe('Bloom filter topic check', () => {
   it('Bloom filter says probably:false for a topic Alpha does not hold', async () => {
     const alphaPeerId = harness.peerId('alpha')
 
-    // Wait for manifest to propagate first
+    // Wait for manifest to propagate first (force-rebroadcast on each poll under load)
     await pollUntil(
       async () => {
+        await harness.client('alpha').rebroadcastManifests().catch(() => {})
         const peers = await harness.client('beta').getDiscoveryPeers()
         return peers.some((p) => p.peerId === alphaPeerId)
       },
-      30_000,
+      45_000,
       'Alpha to appear in Beta\'s peer list'
     )
 

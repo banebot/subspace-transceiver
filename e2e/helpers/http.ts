@@ -219,6 +219,10 @@ export class DaemonClient {
     return this.req('GET', `/discovery/topic-check?peerId=${encodeURIComponent(peerId)}&topic=${encodeURIComponent(topic)}`)
   }
 
+  async rebroadcastManifests(): Promise<void> {
+    await this.req('POST', '/discovery/rebroadcast')
+  }
+
   async browse(
     peerId: string,
     opts?: { collection?: string; since?: number; limit?: number }
@@ -251,5 +255,25 @@ export class DaemonClient {
 
   async getPowStatus(): Promise<unknown> {
     return this.req('GET', '/security/pow-status')
+  }
+
+  async sendMail(to: string, body: string, subject?: string): Promise<{ ok: boolean; mode: string }> {
+    return this.req('POST', '/mail/send', { to, body, subject })
+  }
+
+  async getInbox(): Promise<unknown[]> {
+    return this.req<unknown[]>('GET', '/mail/inbox')
+  }
+
+  async getInboxMessage(id: string): Promise<unknown> {
+    return this.req('GET', `/mail/inbox/${id}`)
+  }
+
+  async deleteInboxMessage(id: string): Promise<void> {
+    return this.req('DELETE', `/mail/inbox/${id}`)
+  }
+
+  async getOutbox(): Promise<unknown[]> {
+    return this.req<unknown[]>('GET', '/mail/outbox')
   }
 }
