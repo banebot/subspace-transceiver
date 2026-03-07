@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeAll } from 'vitest'
 import { keys } from '@libp2p/crypto'
+import type { Ed25519PrivateKey } from '@libp2p/interface'
 import { peerIdFromPrivateKey } from '@libp2p/peer-id'
 import { randomBytes } from 'node:crypto'
 import {
@@ -28,8 +29,8 @@ import {
 // Test fixtures
 // ---------------------------------------------------------------------------
 
-let senderKey: Awaited<ReturnType<typeof keys.generateKeyPairFromSeed>>
-let recipientKey: Awaited<ReturnType<typeof keys.generateKeyPairFromSeed>>
+let senderKey: Ed25519PrivateKey
+let recipientKey: Ed25519PrivateKey
 let senderPeerId: string
 let recipientPeerId: string
 

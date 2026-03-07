@@ -267,7 +267,7 @@ export class TestHarness {
     }
 
     // Have each agent dial every other agent's global TCP addresses via POST /dial
-    const dialPromises: Promise<void>[] = []
+    const dialPromises: Promise<unknown>[] = []
     for (const fromName of names) {
       for (const [toName, addrs] of globalAddrs) {
         if (toName === fromName || addrs.length === 0) continue
@@ -407,7 +407,7 @@ export class TestHarness {
     }
 
     // Dial every other agent
-    const dialPromises: Promise<void>[] = []
+    const dialPromises: Promise<unknown>[] = []
     for (const fromName of names) {
       for (const [toName, addrs] of peerAddrs) {
         if (toName === fromName || addrs.length === 0) continue

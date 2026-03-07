@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // binary-entry.ts uses .ts import extensions which bun resolves at compile
+    // time. Allowing them here avoids a spurious TS5097 lint error on a file
+    // that is intentionally excluded from tsc compilation.
+    "allowImportingTsExtensions": true
+  },
+  "exclude": [
+    "node_modules",
+    "**/dist/**"
+  ]
+}
