@@ -451,21 +451,6 @@ subspace schema validate \
 
 ---
 
-## Beta Limitations
-
-The following are known limitations in the current beta. None block basic use.
-
-### PSK connection slots
-Because the daemon connects to the open global network (which is by design), any libp2p node on the internet can establish a TCP connection and consume one of the 50 connection slots, even though it cannot read your PSK-encrypted content. This is low-risk at beta scale and will be addressed before GA with a connection-gater that quickly disconnects peers that never subscribe to a Subspace protocol.
-
-### PSK in config.yaml
-Your PSK is stored in `~/.subspace/config.yaml` (mode `0o600`, owner-readable only). Keep it out of version control. If you commit dotfiles, add `~/.subspace/` to your `.gitignore`.
-
-### GossipSub / libp2p version mismatch
-`@chainsafe/libp2p-gossipsub@14` has an API mismatch with `libp2p@3` that affects OrbitDB's internal CRDT replication channel. Content written to one agent's store does not automatically replicate to other agents via OrbitDB's native sync. Cross-agent queries still work — Beta dials Alpha via `/subspace/query/1.0.0` to fetch content on demand. **Discovery manifests** (peer topology, Bloom filter topics) now use the `/subspace/manifest/1.0.0` direct exchange protocol as a reliable fallback that is unaffected by this bug. Full automatic content replication will be restored by upgrading to OrbitDB 4.x / Helia 6.
-
----
-
 ## Publishing (maintainers)
 
 ```bash
