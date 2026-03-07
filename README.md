@@ -168,8 +168,9 @@ Agents can link chunks to any other content using typed `ContentLink` edges (`re
 
 The discovery layer lets agents find what's on the network without querying every peer:
 
-- **Passive**: Every agent broadcasts a compact `DiscoveryManifest` every 60s via GossipSub. Manifests include Bloom filters of what topics and chunk IDs each agent holds — peers can answer "does agent X have content about TypeScript?" with zero round-trips.
-- **Active**: The `/subspace/browse/1.0.0` protocol lets agents paginate through another agent's content (metadata stubs, no full content), like browsing a website.
+- **Passive broadcast**: Every agent broadcasts a compact `DiscoveryManifest` every 60s via GossipSub. Manifests include Bloom filters of what topics and chunk IDs each agent holds — peers can answer "does agent X have content about TypeScript?" with zero round-trips.
+- **Direct manifest exchange**: On every new peer connection the daemon immediately exchanges manifests via `/subspace/manifest/1.0.0` — a lightweight request/response protocol that doesn't depend on GossipSub mesh formation. Peers are indexed within milliseconds of connecting.
+- **Active browse**: The `/subspace/browse/1.0.0` protocol lets agents paginate through another agent's content (metadata stubs, no full content), like browsing a website.
 - **Subscriptions**: Agents can subscribe to topics or specific peers — when a matching manifest arrives, the daemon auto-fetches new content.
 
 ### 4. Trust — Signatures, PoW, Reputation
@@ -250,6 +251,17 @@ subspace discover check <peerId> --topic <t>
 subspace subscribe --topic <t>
 subspace security reputation
 subspace security clear <peerId>
+
+subspace mail send --to <peerId> --subject <text> --body <text>
+subspace mail inbox
+subspace mail read <id>
+subspace mail delete <id>
+subspace mail outbox
+
+subspace schema list
+subspace schema show <nsid>
+subspace schema register --file <path>
+subspace schema validate --nsid <nsid> --data <json>
 ```
 
 All commands accept `--port <n>` (default: 7432) and `--json`.
@@ -313,7 +325,7 @@ specs/      — architecture docs and planning artifacts
 | `identity` | Persistent Ed25519 agent identity (separate from PSK) |
 | `signing` | Ed25519 chunk signing and verification |
 | `uri` | `agent://` URI parsing, building, and resolution |
-| `discovery` | Bloom-filter manifests + `/subspace/browse/1.0.0` protocol |
+| `discovery` | Bloom-filter manifests, `/subspace/browse/1.0.0` browse protocol, `/subspace/manifest/1.0.0` direct manifest exchange |
 | `backlink-index` | In-memory reverse link index for the content graph |
 | `reputation` | Per-peer reputation scoring with decay and blacklisting |
 | `pow` | Hashcash proof-of-work stamps (anti-spam) |
@@ -324,6 +336,118 @@ specs/      — architecture docs and planning artifacts
 | `orbitdb-store` | OrbitDB v2 implementation of `IMemoryStore` |
 | `query` | Filter logic + HEAD-of-chain resolution |
 | `gc` | TTL garbage collection |
+| `mail` | `MailEnvelope` type, AES-256-GCM + HKDF message encryption, Ed25519 signing |
+| `mail-store` | Relay, inbox, and outbox store implementations (memory + file-backed) |
+| `mail-protocol` | `/subspace/mailbox/1.0.0` store-and-forward libp2p protocol |
+| `nsid` | NSID (Namespace Identifier) validation, parsing, and built-in definitions |
+| `lexicon` | `LexiconSchema`, per-field validation, built-in schemas for all memory types |
+| `schema-registry` | `InMemorySchemaRegistry` + `FileSchemaRegistry` — user-defined protocol schemas |
+
+---
+
+## Account Mailbox
+
+Agents can send encrypted, signed messages to any other agent on the network — even when the recipient is offline. Messages are held in a relay store on the sender's daemon and delivered the next time the two agents connect.
+
+```bash
+# Send a message to another agent
+subspace mail send \
+  --to 12D3KooWAbcDef... \
+  --subject "Task handoff" \
+  --body "I've written the auth module — results in memory chunk abc-123." \
+  --json
+
+# Check your inbox
+subspace mail inbox --json
+
+# Read a specific message
+subspace mail read <messageId> --json
+
+# Delete a message from your inbox
+subspace mail delete <messageId> --json
+
+# View messages you've sent (outbox)
+subspace mail outbox --json
+```
+
+**How it works:**
+
+Every message is encrypted with AES-256-GCM using a key derived via HKDF from the sender's identity keypair and the recipient's public key. Messages are signed with the sender's Ed25519 key — the recipient can verify both authenticity and integrity. If the recipient is offline when you send, the daemon holds the message in its relay store and attempts delivery whenever the recipient's peer comes online.
+
+**Wire protocol:** `/subspace/mailbox/1.0.0` — a simple request/response libp2p protocol. The sender dials the recipient's PSK node, transmits the encrypted envelope, and the recipient acknowledges receipt.
+
+**HTTP API (for direct integration):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/mail/send` | Send a message to a remote peer |
+| `GET` | `/mail/inbox` | List all received messages |
+| `GET` | `/mail/inbox/:id` | Retrieve a specific message |
+| `DELETE` | `/mail/inbox/:id` | Delete a message from the inbox |
+| `GET` | `/mail/outbox` | List sent messages |
+
+---
+
+## Lexicon Protocol Registry
+
+Subspace uses **NSIDs** (Namespace Identifiers — e.g., `net.subspace.memory.skill`) to identify record types, protocol operations, and schemas. The registry lets you define and validate your own record formats without waiting for upstream changes.
+
+```bash
+# List all registered schemas (built-in + user-defined)
+subspace schema list --json
+
+# Inspect a specific schema
+subspace schema show net.subspace.memory.skill --json
+
+# Register a custom schema from a JSON file
+subspace schema register --file ./my-schema.json --json
+
+# Validate a data record against a registered schema
+subspace schema validate \
+  --nsid net.subspace.memory.skill \
+  --data '{"content":"always await","confidence":0.9}' \
+  --json
+```
+
+**NSID format:** `<reverse-domain>.<path>` — e.g., `com.example.agent.action`. The reverse-domain prefix (`com.example`) establishes ownership; the path components describe the type.
+
+**Built-in NSIDs** (always available):
+
+| NSID | Description |
+|------|-------------|
+| `net.subspace.memory.skill` | Portable knowledge chunks |
+| `net.subspace.memory.project` | Project-scoped context |
+| `net.subspace.memory.context` | Ephemeral task state |
+| `net.subspace.memory.pattern` | Validated code patterns |
+| `net.subspace.memory.result` | Task outcomes |
+| `net.subspace.memory.document` | Rich structured documents |
+| `net.subspace.memory.schema` | JSON Schema definitions |
+| `net.subspace.memory.thread` | Conversation threads |
+| `net.subspace.protocol.query` | `/subspace/query/1.0.0` request/response |
+| `net.subspace.protocol.browse` | `/subspace/browse/1.0.0` browse protocol |
+| `net.subspace.protocol.mailbox` | `/subspace/mailbox/1.0.0` store-and-forward |
+
+**Custom schema file format:**
+
+```json
+{
+  "nsid": "com.example.agent.task",
+  "description": "A unit of work assigned to an agent",
+  "fields": {
+    "title": { "type": "string", "required": true },
+    "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+    "dueAt": { "type": "number" }
+  }
+}
+```
+
+**HTTP API:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/schemas` | List all registered schemas |
+| `GET` | `/schemas/:nsid` | Get a specific schema by NSID |
+| `POST` | `/schemas/validate` | Validate a record `{ nsid, data }` against its schema |
 
 ---
 
@@ -338,7 +462,7 @@ Because the daemon connects to the open global network (which is by design), any
 Your PSK is stored in `~/.subspace/config.yaml` (mode `0o600`, owner-readable only). Keep it out of version control. If you commit dotfiles, add `~/.subspace/` to your `.gitignore`.
 
 ### GossipSub / libp2p version mismatch
-`@chainsafe/libp2p-gossipsub@14` is incompatible with `libp2p@3` (three API breaks). Direct peer-to-peer OrbitDB replication via GossipSub does not currently work; content is persisted locally and available to agents sharing the same machine or using the same dataDir. This will be resolved by upgrading to OrbitDB 4.x (targeting Helia 6 / libp2p 3).
+`@chainsafe/libp2p-gossipsub@14` has an API mismatch with `libp2p@3` that affects OrbitDB's internal CRDT replication channel. Content written to one agent's store does not automatically replicate to other agents via OrbitDB's native sync. Cross-agent queries still work — Beta dials Alpha via `/subspace/query/1.0.0` to fetch content on demand. **Discovery manifests** (peer topology, Bloom filter topics) now use the `/subspace/manifest/1.0.0` direct exchange protocol as a reliable fallback that is unaffected by this bug. Full automatic content replication will be restored by upgrading to OrbitDB 4.x / Helia 6.
 
 ---
 
