@@ -100,11 +100,11 @@ export type {
 // Store interface
 export type { IMemoryStore, MemoryStoreEvents } from './store.js'
 
-// OrbitDB store factory (implementation hidden — use IMemoryStore interface)
-export { createOrbitDBStore, createOrbitDBContext, type OrbitDBContext } from './orbitdb-store.js'
+// Loro CRDT store (v2 replacement for OrbitDB)
+export { LoroMemoryStore, createLoroStore, createPersistentLoroStore } from './loro-store.js'
 
-// OrbitDB access controller (replication-layer chunk validation)
-export { SubspaceAccessController, type SubspaceAccessControllerOptions } from './access-controller.js'
+// Loro epoch manager (v2 replacement for OrbitDB EpochManager)
+export { LoroEpochManager } from './loro-epoch-manager.js'
 
 // Network operations
 export {
@@ -129,9 +129,8 @@ export type {
 export { runGC } from './gc.js'
 export type { GCResult } from './gc.js'
 
-// Epoch-based database rotation
+// Epoch-based database rotation utilities
 export {
-  EpochManager,
   computeEpochId,
   epochStartMs,
   DEFAULT_EPOCH_CONFIG,

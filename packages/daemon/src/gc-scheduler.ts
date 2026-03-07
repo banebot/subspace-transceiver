@@ -3,31 +3,30 @@
  *
  * Each interval tick:
  * 1. Runs TTL GC (tombstones expired chunks within the current epoch)
- * 2. Checks if any EpochManager needs to rotate to a new epoch
- * 3. Drops expired epochs (physically deletes LevelDB directories)
+ * 2. Checks if any LoroEpochManager needs to rotate to a new epoch
+ * 3. Drops expired epochs (physically deletes Loro snapshot files)
  *
  * The GC interval (default: 1 hour) handles both TTL enforcement and
  * epoch lifecycle checks. Epoch rotation itself is rare (weekly by default)
  * but the check is cheap (just a computeEpochId comparison).
  *
- * Also runs immediately on startup to prune stale chunks from previous sessions (AC 17).
+ * Also runs immediately on startup to prune stale chunks from previous sessions.
  */
 
-import { runGC, type IMemoryStore } from '@subspace-net/core'
-import type { EpochManager } from '@subspace-net/core'
+import { runGC, type IMemoryStore, type LoroEpochManager } from '@subspace-net/core'
 
 /**
  * Start the GC + epoch rotation scheduler.
  * Runs once immediately, then on each interval tick.
  *
  * @param getStores       Returns the active IMemoryStore list (live reference)
- * @param getEpochManagers Returns the active EpochManager list for epoch lifecycle
+ * @param getEpochManagers Returns the active LoroEpochManager list for epoch lifecycle
  * @param intervalMs      GC interval in milliseconds (default: 3_600_000 = 1 hour)
  * @returns               Interval handle — call clearInterval() on daemon shutdown
  */
 export function startGCScheduler(
   getStores: () => IMemoryStore[],
-  getEpochManagers: () => EpochManager[],
+  getEpochManagers: () => LoroEpochManager[],
   // SUBSPACE_GC_INTERVAL_MS env var enables fast GC cycles in tests
   intervalMs: number = parseInt(process.env.SUBSPACE_GC_INTERVAL_MS ?? '3600000', 10)
 ): ReturnType<typeof setInterval> {

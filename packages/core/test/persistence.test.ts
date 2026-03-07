@@ -1,60 +1,39 @@
 /**
- * Persistence test — verifies that data survives OrbitDB restart.
+ * Persistence test — verifies that data survives a LoroMemoryStore restart.
  *
- * Reproduces two bugs that caused memory query to return [] after restart:
+ * Loro stores snapshots as binary files using `doc.export({ mode: 'snapshot' })`.
+ * On restart, the snapshot is loaded via `doc.import(bytes)` and all data is restored.
  *
- * BUG 1 — Level DBs never closed:
- *   Helia.stop() uses @libp2p/interface's stop() which requires start()/stop()
- *   methods, but LevelBlockstore/LevelDatastore only have open()/close().
- *   Result: Level file locks are never released → "Database failed to open"
- *   on restart.
- *
- * BUG 2 — Blockstore get() API mismatch:
- *   Helia v6 / blockstore-level v3 changed Blockstore.get() to return
- *   AsyncIterable<Uint8Array>. OrbitDB v3's IPFSBlockStorage does
- *   `await ipfs.blockstore.get(cid)` expecting Promise<Uint8Array>.
- *   Result: after restart the LRU cache is empty, IPFSBlockStorage returns
- *   a generator object instead of bytes → entries can't be decoded.
+ * This replaces the OrbitDB persistence tests which required LevelDB, Helia, and
+ * a full libp2p node. Loro snapshots are self-contained binary blobs — no external
+ * dependencies needed.
  */
 
 import { describe, it, expect } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { deriveNetworkKeys } from '../src/crypto.js'
-import { createOrbitDBContext, createOrbitDBStore, type OrbitDBContext } from '../src/orbitdb-store.js'
-import { createLibp2pNode } from '../src/node.js'
+import { LoroMemoryStore } from '../src/loro-store.js'
 import { createChunk } from '../src/schema.js'
-import { deriveNetworkId } from '../src/network.js'
-import { keys } from '@libp2p/crypto'
-import { randomBytes } from 'node:crypto'
 
-const TEST_PSK = 'persistence-test-psk-do-not-use-in-prod-32chars!'
+const NET = 'persistence-test-net'
 
-describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
+describe('Loro snapshot persistence across restart', () => {
   it('data written before close is readable after reopen', async () => {
-    const networkKeys = deriveNetworkKeys(TEST_PSK)
-    const networkId = deriveNetworkId(TEST_PSK)
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-persist-'))
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-loro-persist-'))
+    const snapshotPath = path.join(tmpDir, 'store-skill.bin')
 
-    // ── Phase 1: write data ──
-    const agentKey = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))
-    let { node } = await createLibp2pNode(agentKey, { port: 0, connectionPruner: false })
-    let ctx: OrbitDBContext = await createOrbitDBContext(node, tmpDir, networkId)
-    let store = await createOrbitDBStore(ctx.orbitdb, networkKeys, 'project')
+    // ── Phase 1: write data ──────────────────────────────────────────────────
+    let store = await LoroMemoryStore.createPersistent(snapshotPath)
 
     const chunk = createChunk({
       type: 'project',
       namespace: 'project',
       topic: ['persistence', 'test'],
       content: 'This data must survive a restart',
-      source: {
-        agentId: 'test-agent',
-        peerId: node.peerId.toString(),
-        timestamp: Date.now(),
-      },
+      source: { agentId: 'test-agent', peerId: 'peer-1', timestamp: Date.now() },
       confidence: 0.9,
-      network: 'test-network',
+      network: NET,
     })
 
     await store.put(chunk)
@@ -64,20 +43,12 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
     expect(beforeClose).toHaveLength(1)
     expect(beforeClose[0].content).toBe('This data must survive a restart')
 
-    // Close everything — including raw Level databases
+    // Close — this flushes the snapshot to disk
     await store.close()
-    await ctx.orbitdb.stop()
-    await ctx.helia.stop()
-    await ctx.closeLevelStores()
-    await node.stop()
 
-    // ── Phase 2: reopen with same data directory ──
-    const agentKey2 = await keys.generateKeyPairFromSeed('Ed25519', Buffer.from(randomBytes(32)))
-    ;({ node } = await createLibp2pNode(agentKey2, { port: 0, connectionPruner: false }))
-    ctx = await createOrbitDBContext(node, tmpDir, networkId)
-    store = await createOrbitDBStore(ctx.orbitdb, networkKeys, 'project')
+    // ── Phase 2: reopen with same snapshot file ──────────────────────────────
+    store = await LoroMemoryStore.createPersistent(snapshotPath)
 
-    // Query should return the previously stored data
     const afterReopen = await store.query({ topics: ['persistence'] })
     expect(afterReopen).toHaveLength(1)
     expect(afterReopen[0].id).toBe(chunk.id)
@@ -88,12 +59,103 @@ describe('OrbitDB persistence across restart', { timeout: 120_000 }, () => {
     expect(direct).not.toBeNull()
     expect(direct?.content).toBe('This data must survive a restart')
 
-    // Cleanup
     await store.close()
-    await ctx.orbitdb.stop()
-    await ctx.helia.stop()
-    await ctx.closeLevelStores()
-    await node.stop()
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('multiple chunks survive restart', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-loro-persist2-'))
+    const snapshotPath = path.join(tmpDir, 'store.bin')
+
+    let store = await LoroMemoryStore.createPersistent(snapshotPath)
+
+    const chunks = [
+      createChunk({ type: 'skill', namespace: 'skill', topic: ['alpha'], content: 'alpha', source: { agentId: 'a', peerId: 'p', timestamp: Date.now() }, confidence: 0.8, network: NET }),
+      createChunk({ type: 'skill', namespace: 'skill', topic: ['beta'], content: 'beta', source: { agentId: 'a', peerId: 'p', timestamp: Date.now() + 1 }, confidence: 0.7, network: NET }),
+      createChunk({ type: 'pattern', namespace: 'skill', topic: ['gamma'], content: 'gamma', source: { agentId: 'a', peerId: 'p', timestamp: Date.now() + 2 }, confidence: 0.6, network: NET }),
+    ]
+
+    for (const c of chunks) await store.put(c)
+    await store.close()
+
+    store = await LoroMemoryStore.createPersistent(snapshotPath)
+    const all = await store.list()
+    expect(all).toHaveLength(3)
+    const ids = all.map(c => c.id).sort()
+    expect(ids).toEqual(chunks.map(c => c.id).sort())
+
+    await store.close()
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('tombstones survive restart', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-loro-persist3-'))
+    const snapshotPath = path.join(tmpDir, 'store.bin')
+
+    let store = await LoroMemoryStore.createPersistent(snapshotPath)
+
+    const chunk = createChunk({
+      type: 'skill', namespace: 'skill', topic: ['deletable'], content: 'to-be-deleted',
+      source: { agentId: 'a', peerId: 'p', timestamp: Date.now() }, confidence: 0.8, network: NET,
+    })
+
+    await store.put(chunk)
+    await store.forget(chunk.id)
+    await store.close()
+
+    // Reopen — tombstone must be preserved
+    store = await LoroMemoryStore.createPersistent(snapshotPath)
+    const retrieved = await store.get(chunk.id)
+    expect(retrieved).toBeNull() // tombstoned
+
+    const all = await store.list()
+    expect(all).toHaveLength(0) // tombstone excluded from list
+
+    await store.close()
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('explicit save() flushes snapshot before close()', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-loro-persist4-'))
+    const snapshotPath = path.join(tmpDir, 'store.bin')
+
+    let store = await LoroMemoryStore.createPersistent(snapshotPath)
+
+    const chunk = createChunk({
+      type: 'skill', namespace: 'skill', topic: ['saved'], content: 'explicitly-saved',
+      source: { agentId: 'a', peerId: 'p', timestamp: Date.now() }, confidence: 0.9, network: NET,
+    })
+    await store.put(chunk)
+
+    // Explicit save before close
+    await store.save()
+
+    // Verify file exists and has data
+    const stat = await fs.stat(snapshotPath)
+    expect(stat.size).toBeGreaterThan(0)
+
+    // Close without further save
+    store.close()
+
+    // Reload and check
+    store = await LoroMemoryStore.createPersistent(snapshotPath)
+    const result = await store.get(chunk.id)
+    expect(result).not.toBeNull()
+    expect(result?.content).toBe('explicitly-saved')
+
+    await store.close()
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  })
+
+  it('fresh store (no snapshot file) starts empty', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'subspace-loro-fresh-'))
+    const snapshotPath = path.join(tmpDir, 'nonexistent.bin')
+
+    const store = await LoroMemoryStore.createPersistent(snapshotPath)
+    const all = await store.list()
+    expect(all).toHaveLength(0)
+
+    await store.close()
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   })
 })

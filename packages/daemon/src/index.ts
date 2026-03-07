@@ -24,7 +24,7 @@ import {
   RateLimiter,
   ReputationStore,
   StampCache,
-  type EpochManager,
+  type LoroEpochManager,
   RELAY_ADDRESSES,
   registerMailboxProtocol,
   createFileMailStores,
@@ -390,7 +390,7 @@ async function main() {
       return stores
     },
     () => {
-      const managers: EpochManager[] = []
+      const managers: LoroEpochManager[] = []
       for (const session of sessions.values()) {
         managers.push(session.epochManagers.skill, session.epochManagers.project)
       }

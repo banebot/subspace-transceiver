@@ -20,14 +20,12 @@
  */
 
 import type { Libp2p } from 'libp2p'
-import type { OrbitDB } from '@orbitdb/core'
-import type { Helia } from 'helia'
 import type { PrivateKey } from '@libp2p/interface'
 import { deriveNetworkKeys, validatePSK, type NetworkKeys } from './crypto.js'
 import { createLibp2pNode, derivePeerId } from './node.js'
 import type { SubspaceConnectionPruner } from './connection-pruner.js'
-import { createOrbitDBContext, type OrbitDBContext } from './orbitdb-store.js'
-import { EpochManager, DEFAULT_EPOCH_CONFIG, type EpochConfig } from './epoch-manager.js'
+import { LoroEpochManager } from './loro-epoch-manager.js'
+import { DEFAULT_EPOCH_CONFIG, type EpochConfig } from './epoch-manager.js'
 import type { IMemoryStore } from './store.js'
 import { BacklinkIndex } from './backlink-index.js'
 import { DiscoveryManager } from './discovery.js'
@@ -53,19 +51,15 @@ export interface NetworkSession {
   node: Libp2p
   /** Connection pruner — stops pending prune timers on leave. Null when disabled. */
   pruner: SubspaceConnectionPruner | null
-  /** Shared Helia IPFS node (must be stopped when leaving the network) */
-  helia: Helia
-  /** Shared OrbitDB instance */
-  orbitdb: OrbitDB
-  /** Memory stores, keyed by namespace (backed by EpochManager for disk reclamation) */
+  /** Memory stores, keyed by namespace (backed by LoroEpochManager for disk reclamation) */
   stores: {
     skill: IMemoryStore
     project: IMemoryStore
   }
   /** Epoch managers (same objects as stores, cast — for epoch lifecycle operations) */
   epochManagers: {
-    skill: EpochManager
-    project: EpochManager
+    skill: LoroEpochManager
+    project: LoroEpochManager
   }
   /** In-memory backlink index for content graph traversal */
   backlinkIndex: BacklinkIndex
@@ -75,8 +69,6 @@ export interface NetworkSession {
   networkKeys: NetworkKeys
   /** Agent identity private key (signing + libp2p identity) */
   agentPrivateKey: PrivateKey
-  /** Close Level databases that Helia.stop() does not reach */
-  closeLevelStores: () => Promise<void>
 }
 
 /**
@@ -177,15 +169,8 @@ export async function joinNetwork(
   const networkDataDir = path.join(options.dataDir, 'networks', networkId)
   const localPeerId = derivePeerId(agentPrivateKey)
 
-  // Helper: detect "Database failed to open" LevelDB LOCK errors so we can retry.
-  const isDbLockError = (err: unknown): boolean => {
-    const msg = String(err)
-    return msg.includes('Database failed to open') || msg.includes('LOCK') || msg.includes('ERR_OPEN_FAILED')
-  }
-
   let node: Libp2p | undefined
   let pruner: SubspaceConnectionPruner | null = null
-  let ctx: OrbitDBContext | undefined
   try {
     // Derive a PSK-specific libp2p key so the PSK node has a different PeerId
     // from the global node.  This avoids mDNS address confusion where two
@@ -200,29 +185,11 @@ export async function joinNetwork(
       relayAddresses: options.relayAddresses,
     }))
 
-    // Create a single Helia + OrbitDB context shared by both namespaces.
-    // Pass networkId so OrbitDB always uses the same signing identity across restarts.
-    // Retry on "Database failed to open" — after a daemon restart the OS may need
-    // a brief moment to fully release LevelDB file locks from the previous process.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        ctx = await createOrbitDBContext(node, networkDataDir, networkId)
-        break
-      } catch (err) {
-        if (attempt < 2 && isDbLockError(err)) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
-          continue
-        }
-        throw err
-      }
-    }
-
-    if (!ctx) throw new Error('createOrbitDBContext returned undefined after retries')
-
+    // Create Loro epoch managers for both namespaces.
     const epochConfig = options.epochConfig ?? DEFAULT_EPOCH_CONFIG
     const [skillManager, projectManager] = await Promise.all([
-      EpochManager.create(ctx.orbitdb, networkKeys, 'skill', epochConfig, networkDataDir),
-      EpochManager.create(ctx.orbitdb, networkKeys, 'project', epochConfig, networkDataDir),
+      LoroEpochManager.create('skill', epochConfig, networkDataDir),
+      LoroEpochManager.create('project', epochConfig, networkDataDir),
     ])
 
     // Build backlink index from existing store contents
@@ -274,24 +241,17 @@ export async function joinNetwork(
       name: options.name,
       node,
       pruner,
-      helia: ctx.helia,
-      orbitdb: ctx.orbitdb,
       stores: { skill: skillManager, project: projectManager },
       epochManagers: { skill: skillManager, project: projectManager },
       backlinkIndex,
       discovery,
       networkKeys,
       agentPrivateKey,
-      closeLevelStores: ctx.closeLevelStores,
     }
 
     return session
   } catch (err) {
     // Clean up in reverse order if init failed
-    if (ctx) {
-      await ctx.helia.stop().catch(() => {})
-      await ctx.closeLevelStores().catch(() => {})
-    }
     if (node) {
       await Promise.resolve(node.stop()).catch(() => {})
     }
@@ -316,14 +276,11 @@ export async function leaveNetwork(session: NetworkSession): Promise<void> {
   // Stop discovery manager first (unregisters protocols)
   await session.discovery.stop().catch((e: unknown) => errors.push(e))
 
-  // Close stores first (they hold DB handles on top of OrbitDB)
+  // Close stores (Loro snapshots are flushed to disk on close)
   await session.stores.skill.close().catch((e: unknown) => errors.push(e))
   await session.stores.project.close().catch((e: unknown) => errors.push(e))
-  // Then close OrbitDB, Helia, and the libp2p node in order
-  await Promise.resolve(session.orbitdb.stop()).catch((e: unknown) => errors.push(e))
-  await session.helia.stop().catch((e: unknown) => errors.push(e))
-  // Close raw Level databases — Helia.stop() does NOT close these
-  await session.closeLevelStores().catch((e: unknown) => errors.push(e))
+
+  // Stop the libp2p node
   await Promise.resolve(session.node.stop()).catch((e: unknown) => errors.push(e))
 
   if (errors.length > 0) {
