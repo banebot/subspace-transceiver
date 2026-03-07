@@ -22,7 +22,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --build tsconfig.json",
     "test": "vitest run",
     "prepublishOnly": "npm run build"
   },

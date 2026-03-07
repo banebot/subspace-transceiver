@@ -25,7 +25,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --build tsconfig.json",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

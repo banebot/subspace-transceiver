@@ -22,7 +22,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --build tsconfig.json",
     "start": "node dist/index.js",
     "start:foreground": "node dist/index.js --foreground",
     "prepublishOnly": "npm run build"
