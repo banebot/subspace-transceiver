@@ -139,6 +139,8 @@ export class DiscoveryManager extends EventEmitter {
   private rebroadcastTimer?: ReturnType<typeof setTimeout>
   private gossipUnsub?: () => void
   private started = false
+  /** Cached discovery topic hex (set during start()) */
+  private discoveryTopicHex: string | null = null
 
   /**
    * @param bridge  The EngineBridge managing the Iroh engine.
@@ -170,6 +172,7 @@ export class DiscoveryManager extends EventEmitter {
       .createHash('sha256')
       .update(DISCOVERY_TOPIC, 'utf8')
       .digest('hex')
+    this.discoveryTopicHex = topicHex
 
     // Subscribe to incoming gossip messages
     this.gossipUnsub = this.bridge.onGossipMessage((msg: GossipMessage) => {
@@ -221,6 +224,32 @@ export class DiscoveryManager extends EventEmitter {
       this.gossipUnsub = undefined
     }
     this.started = false
+  }
+
+  /**
+   * Introduce a remote peer to the gossip discovery mesh.
+   *
+   * Calls gossipJoin with the peer's NodeId as a bootstrap peer. This prompts
+   * iroh-gossip to establish a connection to the peer and exchange manifests.
+   * Once connected, both peers will receive each other's periodic broadcasts.
+   *
+   * @param nodeId Iroh EndpointId (hex string) of the peer to introduce
+   */
+  async addDiscoveryPeer(nodeId: string): Promise<void> {
+    if (!this.discoveryTopicHex) {
+      throw new Error('Discovery not started — call start() first')
+    }
+    try {
+      await this.bridge.gossipJoin({
+        topicHex: this.discoveryTopicHex,
+        bootstrapPeers: [nodeId],
+      })
+      // Immediately broadcast our manifest so the peer sees us right away
+      void this.broadcastManifest()
+    } catch (err) {
+      console.warn('[subspace] Discovery: could not introduce peer:', err)
+      throw err
+    }
   }
 
   /**
@@ -282,6 +311,10 @@ export class DiscoveryManager extends EventEmitter {
       .createHash('sha256')
       .update(DISCOVERY_TOPIC, 'utf8')
       .digest('hex')
+
+    // Self-index: store our own manifest so we appear in getKnownPeers()
+    // (gossip does not echo messages back to the sender, so we do it ourselves)
+    this.processManifestLocal(manifest)
 
     try {
       await this.bridge.gossipBroadcast(topicHex, encoded)
@@ -352,16 +385,28 @@ export class DiscoveryManager extends EventEmitter {
     }
   }
 
+  /**
+   * Process a manifest received from a REMOTE peer via gossip.
+   * Drops own manifests (gossip relays shouldn't loop) and applies PoW checks.
+   */
   private processManifest(manifest: DiscoveryManifest): void {
-    // Drop our own manifests
+    // Drop our own manifests received via gossip (we self-index in broadcastManifest)
     if (manifest.peerId === this.opts.localPeerId) return
+    this.processManifestLocal(manifest)
+  }
 
-    // Optional PoW verification
-    if (this.opts.requirePoW && manifest.pow) {
+  /**
+   * Index a manifest into the peer index unconditionally (used for self-indexing
+   * and any path that has already validated the manifest source).
+   */
+  private processManifestLocal(manifest: DiscoveryManifest): void {
+    // Optional PoW verification (skip for self)
+    const isSelf = manifest.peerId === this.opts.localPeerId
+    if (!isSelf && this.opts.requirePoW && manifest.pow) {
       if (!verifyStamp(manifest.pow, manifest.peerId, manifest.peerId, 16, 3_600_000)) {
         return
       }
-    } else if (this.opts.requirePoW && !manifest.pow) {
+    } else if (!isSelf && this.opts.requirePoW && !manifest.pow) {
       return // PoW required but not present
     }
 
@@ -380,6 +425,8 @@ export class DiscoveryManager extends EventEmitter {
     this.peerIndex.set(manifest.peerId, entry)
 
     this.emit('manifest', entry)
+
+    if (isSelf) return // No subscription triggers for self
 
     // Trigger subscribed topic fetches
     if (this.opts.subscribedTopics) {

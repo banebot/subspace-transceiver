@@ -183,8 +183,10 @@ export async function joinNetwork(
     projectManager.on('replicated', () => { void updateBacklinks(projectManager) })
 
     // Create the discovery manager (Iroh gossip-based)
+    // Use identity.peerId as the canonical identifier so it matches health.peerId.
+    // agentPeerId carries the DID for agent:// URI resolution.
     const discovery = new DiscoveryManager(bridge, [skillManager, projectManager], {
-      localPeerId: identity.did ?? identity.peerId,
+      localPeerId: identity.peerId,
       agentPeerId: identity.did,
       displayName: options.displayName,
       subscribedTopics: options.subscribedTopics,
@@ -350,7 +352,8 @@ export async function joinGlobalNetwork(
     await bridge.engineStart({ seedHex: Buffer.from(identity.privateKey.raw.slice(0, 32)).toString('hex') })
   }
 
-  const localPeerId = identity.did ?? identity.peerId
+  // Use identity.peerId as the canonical identifier to match health.peerId
+  const localPeerId = identity.peerId
 
   const discovery = new DiscoveryManager(bridge, [], {
     localPeerId,

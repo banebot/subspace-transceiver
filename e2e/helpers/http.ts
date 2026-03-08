@@ -250,6 +250,11 @@ export class DaemonClient {
     await this.req('POST', '/discovery/rebroadcast')
   }
 
+  /** Introduce a remote peer to the local gossip mesh for discovery. */
+  async introducePeer(nodeId: string): Promise<void> {
+    await this.req('POST', '/discovery/introduce', { nodeId })
+  }
+
   async browse(
     peerId: string,
     opts?: { collection?: string; since?: number; limit?: number }

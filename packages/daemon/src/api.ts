@@ -1112,8 +1112,9 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     // Global session and PSK sessions may overlap (same peer seen in both).
     const addEntries = (discovery: import('@subspace-net/core').DiscoveryManager) => {
       for (const entry of discovery.getKnownPeers()) {
-        // Use the canonical (global) agent peer ID if available, else PSK peer ID.
-        const displayPeerId = entry.agentPeerId ?? entry.peerId
+        // entry.peerId is the canonical identity.peerId — matches health.peerId.
+        // entry.agentPeerId (if present) holds the DID for agent:// resolution.
+        const displayPeerId = entry.peerId
         if (seen.has(displayPeerId)) continue
         seen.add(displayPeerId)
         peers.push({
@@ -1123,7 +1124,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
           chunkCount: entry.chunkCount,
           updatedAt: entry.updatedAt,
           lastSeen: entry.lastSeen,
-          agentUri: buildAgentURI(displayPeerId),
+          // agentUri uses the canonical peerId (identity.peerId) to match health.agentUri
+          agentUri: buildAgentURI(entry.peerId),
         })
       }
     }
@@ -1139,6 +1141,32 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   })
 
   // ---------------------------------------------------------------------------
+  // POST /discovery/introduce — introduce a remote peer to the gossip mesh
+  // Accepts { nodeId } and makes gossip connect to that peer.
+  // Use this in tests and CLI tools to bootstrap cross-agent discovery.
+  // ---------------------------------------------------------------------------
+  app.post('/discovery/introduce', async (req, reply) => {
+    const body = req.body as { nodeId?: string }
+    if (!body.nodeId) {
+      return reply.status(400).send({ error: '"nodeId" is required', code: 'INVALID_REQUEST' })
+    }
+    // Introduce to global session discovery (the primary discovery channel)
+    if (state.globalSession) {
+      try {
+        await state.globalSession.discovery.addDiscoveryPeer(body.nodeId)
+      } catch (err) {
+        return reply.status(500).send({ error: String(err), code: 'INTRODUCE_FAILED' })
+      }
+    }
+    // Also introduce to all PSK session discoveries
+    await Promise.all(
+      [...state.sessions.values()].map(s =>
+        s.discovery.addDiscoveryPeer(body.nodeId!).catch(() => {})
+      )
+    )
+    return reply.status(204).send()
+  })
+
   // POST /discovery/rebroadcast — force-rebroadcast manifests on all sessions
   // Useful in tests and debugging to ensure peers exchange discovery manifests
   // without waiting for the periodic broadcast interval.
