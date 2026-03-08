@@ -255,17 +255,22 @@ export class DaemonClient {
     await this.req('POST', '/discovery/introduce', { nodeId })
   }
 
+  /** Browse a remote peer's public content stubs. */
   async browse(
     peerId: string,
-    opts?: { collection?: string; since?: number; limit?: number }
-  ): Promise<{ stubs: unknown[]; peerId: string }> {
+    opts: { nodeId?: string; collection?: string; since?: number; limit?: number; directAddrs?: string } = {}
+  ): Promise<{ stubs: Array<{ id: string; title?: string; collection?: string; topic: string[]; updated_at: number }>; hasMore: boolean }> {
     const params = new URLSearchParams()
-    if (opts?.collection) params.set('collection', opts.collection)
-    if (opts?.since !== undefined) params.set('since', String(opts.since))
-    if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts.nodeId) params.set('nodeId', opts.nodeId)
+    if (opts.collection) params.set('collection', opts.collection)
+    if (opts.since !== undefined) params.set('since', String(opts.since))
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts.directAddrs) params.set('directAddrs', opts.directAddrs)
     const qs = params.toString()
     return this.req('GET', `/browse/${peerId}${qs ? '?' + qs : ''}`)
   }
+
+
 
   async getSite(peerId: string): Promise<{ peerId: string; profile: MemoryChunk | null; collections: string[]; chunkCount: number; agentUri: string }> {
     return this.req('GET', `/site/${peerId}`)

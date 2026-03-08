@@ -1250,51 +1250,68 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   })
 
   // ---------------------------------------------------------------------------
-  // GET /browse/:peerId — browse remote peer's site (active fetch)
+  // GET /browse/:peerId — browse remote peer's site (active fetch via Iroh QUIC)
+  // peerId can be the Iroh NodeId (hex) or the legacy libp2p PeerId.
+  // We need the Iroh NodeId (hex) to dial the peer — clients should provide this
+  // via the `nodeId` query param, falling back to peerId if it looks like a hex nodeId.
   // ---------------------------------------------------------------------------
   app.get('/browse/:peerId', async (req, reply) => {
     const { peerId } = req.params as { peerId: string }
-    const { collection, since, limit = '50' } = req.query as {
-      collection?: string; since?: string; limit?: string
+    const { collection, since, limit = '50', nodeId: nodeIdOverride, directAddrs, relayUrl } = req.query as {
+      collection?: string
+      since?: string
+      limit?: string
+      nodeId?: string
+      directAddrs?: string
+      relayUrl?: string
     }
 
     const parsedLimit = parseInt(limit, 10)
     const parsedSince = since ? parseInt(since, 10) : undefined
-    let lastError: unknown = null
+    const parsedDirectAddrs = directAddrs ? directAddrs.split(',').map(s => s.trim()) : undefined
 
-    // Try each PSK session first (they may have the peer connected in a private mesh)
-    for (const session of state.sessions.values()) {
-      try {
-        const result = await Promise.resolve({ stubs: [], hasMore: false })
-        return reply.send(result)
-      } catch (err) {
-        lastError = err
-        // Continue — peer may be reachable via another session or the global node
-      }
-    }
+    // Resolve the target's Iroh NodeId:
+    // 1. Use `nodeId` query param if provided
+    // 2. Fall back to peerId if it looks like a 64-char hex string (Iroh NodeId format)
+    const targetNodeId = nodeIdOverride
+      ?? (/^[0-9a-f]{64}$/i.test(peerId) ? peerId : null)
 
-    // Fall back to the global session — any peer reachable on the open internet
-    // can be browsed via the global node even without a PSK network active.
-    if (state.globalSession) {
-      try {
-        const result = await Promise.resolve({ stubs: [], hasMore: false })
-        return reply.send(result)
-      } catch (err) {
-        lastError = err
-      }
-    }
-
-    if (lastError) {
-      return reply.status(503).send({
-        error: `Could not browse peer ${peerId}: ${String(lastError)}`,
-        code: ErrorCode.PEER_DIAL_FAILED,
+    if (!targetNodeId) {
+      return reply.status(400).send({
+        error: `Cannot browse ${peerId}: Iroh NodeId required. ` +
+          'Provide the peer\'s nodeId (64-char hex) as a query parameter: ?nodeId=<hex>',
+        code: 'NODEID_REQUIRED',
       })
     }
 
-    return reply.status(404).send({
-      error: 'No network sessions available for browsing. Daemon may still be connecting to bootstrap peers.',
-      code: ErrorCode.NETWORK_NOT_FOUND,
-    })
+    // Use global session bridge for the browse request (any publicly reachable peer)
+    const bridge = state.globalSession?.bridge
+    if (!bridge?.isRunning) {
+      return reply.status(503).send({
+        error: 'Global session not available. Daemon may still be starting.',
+        code: ErrorCode.NETWORK_NOT_FOUND,
+      })
+    }
+
+    try {
+      const result = await bridge.browseFrom({
+        targetNodeId,
+        directAddrs: parsedDirectAddrs,
+        relayUrl: relayUrl,
+        collection,
+        since: parsedSince,
+        limit: parsedLimit,
+      })
+      return reply.send({
+        stubs: result.stubs,
+        hasMore: result.has_more,
+      })
+    } catch (err) {
+      return reply.status(503).send({
+        error: `Could not browse peer ${peerId}: ${String(err)}`,
+        code: ErrorCode.PEER_DIAL_FAILED,
+      })
+    }
   })
 
   // ===========================================================================

@@ -111,11 +111,16 @@ pub mod methods {
     pub const MAIL_SEND: &str = "mail.send";
     pub const ENGINE_ADDR_FULL: &str = "engine.addrFull";
 
+    // Browse
+    pub const BROWSE_FROM: &str = "browse.from";
+    pub const BROWSE_RESPOND: &str = "browse.respond";
+
     // Notifications (Rust → Node.js)
     pub const NOTIFY_PEER_CONNECTED: &str = "peer.connected";
     pub const NOTIFY_PEER_DISCONNECTED: &str = "peer.disconnected";
     pub const NOTIFY_GOSSIP_RECEIVED: &str = "gossip.received";
     pub const NOTIFY_MAIL_RECEIVED: &str = "mail.received";
+    pub const NOTIFY_BROWSE_REQUEST: &str = "browse.request";
     pub const NOTIFY_READY: &str = "engine.ready";
 }
 

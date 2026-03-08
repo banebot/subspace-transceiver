@@ -27,6 +27,7 @@ import {
   type LoroEpochManager,
   IROH_PUBLIC_RELAYS,
   registerMailboxProtocol,
+  registerBrowseProtocol,
   CapabilityRegistry,
   registerNegotiateProtocol,
   createFileMailStores,
@@ -412,6 +413,25 @@ async function main() {
       setTimeout(() => doPoll().catch(() => {}), 5_000)
       mailPollHandle = setInterval(() => doPoll().catch(() => {}), config.mailbox.pollIntervalMs)
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Register browse protocol (serve incoming browse requests from remote peers)
+  // ---------------------------------------------------------------------------
+  if (globalSession?.bridge.isRunning) {
+    // Pass a getter function so it always reflects current PSK sessions.
+    // The getter is called at request time, not at registration time.
+    registerBrowseProtocol(
+      globalSession.bridge,
+      () => {
+        const stores: import('@subspace-net/core').IMemoryStore[] = []
+        for (const session of sessions.values()) {
+          stores.push(session.stores.skill, session.stores.project)
+        }
+        return stores
+      },
+      { maxStubs: 200 }
+    )
   }
 
   // ---------------------------------------------------------------------------

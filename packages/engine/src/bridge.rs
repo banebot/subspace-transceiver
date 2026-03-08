@@ -15,6 +15,7 @@
  * 5. Exchange continues until `engine.stop` or stdin closes
  */
 
+use crate::browse::{handle_browse_respond, new_pending_browse, send_browse_wire, BrowseFromParams, BrowseHandler, PendingBrowse, BROWSE_ALPN};
 use crate::gossip::GossipManager;
 use crate::mailbox::{MailboxHandler, send_mail_wire, MAILBOX_ALPN};
 use crate::rpc::{
@@ -46,6 +47,8 @@ pub struct Bridge {
     /// Channel for sending notifications to the stdout writer task.
     notify_tx: mpsc::UnboundedSender<RpcNotification>,
     notify_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<RpcNotification>>>>,
+    /// Pending browse requests waiting for TypeScript to respond.
+    pending_browse: PendingBrowse,
 }
 
 impl Bridge {
@@ -56,6 +59,7 @@ impl Bridge {
             gossip_manager: Arc::new(Mutex::new(GossipManager::new())),
             notify_tx: tx,
             notify_rx: Arc::new(Mutex::new(Some(rx))),
+            pending_browse: new_pending_browse(),
         }
     }
 
@@ -127,6 +131,8 @@ impl Bridge {
             methods::GOSSIP_LEAVE     => self.handle_gossip_leave(id, req.params).await,
             methods::GOSSIP_BROADCAST => self.handle_gossip_broadcast(id, req.params).await,
             methods::MAIL_SEND        => self.handle_mail_send(id, req.params).await,
+            methods::BROWSE_FROM      => self.handle_browse_from_rpc(id, req.params).await,
+            methods::BROWSE_RESPOND   => self.handle_browse_respond_rpc(id, req.params).await,
             _ => RpcResponse::error(id, RpcError::method_not_found(&req.method)),
         }
     }
@@ -162,7 +168,7 @@ impl Bridge {
         let secret_key = SecretKey::from(seed);
         let endpoint = match Endpoint::builder()
             .secret_key(secret_key)
-            .alpns(vec![GOSSIP_ALPN.to_vec(), MAILBOX_ALPN.to_vec()])
+            .alpns(vec![GOSSIP_ALPN.to_vec(), MAILBOX_ALPN.to_vec(), BROWSE_ALPN.to_vec()])
             .bind()
             .await
         {
@@ -178,11 +184,18 @@ impl Bridge {
             notify_tx: self.notify_tx.clone(),
         };
 
+        // Build browse protocol handler (pending map shared with bridge)
+        let browse_handler = BrowseHandler::new(
+            self.notify_tx.clone(),
+            self.pending_browse.clone(),
+        );
+
         // Build and spawn the router for incoming connections
         let gossip_proto = gossip.clone();
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(GOSSIP_ALPN, gossip_proto)
             .accept(MAILBOX_ALPN, mailbox_handler)
+            .accept(BROWSE_ALPN, browse_handler)
             .spawn();
 
         let ep_id = endpoint.id().to_string();
@@ -392,6 +405,30 @@ impl Bridge {
             Ok(_) => RpcResponse::success(id, json!({ "broadcast": true })),
             Err(e) => RpcResponse::error(id, RpcError::internal(e.to_string())),
         }
+    }
+
+    async fn handle_browse_from_rpc(&self, id: String, params: Value) -> RpcResponse {
+        let endpoint = {
+            let guard = self.state.lock().await;
+            match guard.as_ref() {
+                Some(s) => s.endpoint.clone(),
+                None => return RpcResponse::error(id, RpcError::internal("Engine not started")),
+            }
+        };
+
+        let p: BrowseFromParams = match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => return RpcResponse::error(id, RpcError::invalid_params(e.to_string())),
+        };
+
+        match send_browse_wire(&endpoint, p).await {
+            Ok(resp) => RpcResponse::success(id, serde_json::to_value(&resp).unwrap_or(serde_json::json!({}))),
+            Err(e) => RpcResponse::error(id, RpcError::internal(format!("Browse failed: {}", e))),
+        }
+    }
+
+    async fn handle_browse_respond_rpc(&self, id: String, params: Value) -> RpcResponse {
+        handle_browse_respond(&self.pending_browse, id, params).await
     }
 }
 

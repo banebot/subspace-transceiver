@@ -29,6 +29,7 @@
 pub mod endpoint;
 pub mod gossip;
 pub mod mailbox;
+pub mod browse;
 pub mod protocols;
 pub mod bridge;
 pub mod rpc;

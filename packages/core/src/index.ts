@@ -257,6 +257,9 @@ export {
 } from './mail-protocol.js'
 export type { MailboxHandlerOptions, SendMailOptions } from './mail-protocol.js'
 
+export { registerBrowseProtocol } from './browse-protocol.js'
+export type { BrowseProtocolOptions } from './browse-protocol.js'
+
 // Iroh engine bridge (stdio JSON-RPC to Rust P2P engine)
 export {
   EngineBridge,

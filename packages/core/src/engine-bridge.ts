@@ -79,6 +79,34 @@ export interface MailReceivedEvent {
   fromNodeId: string
 }
 
+/** A single content stub returned by the browse protocol. */
+export interface BrowseStub {
+  id: string
+  title?: string
+  collection?: string
+  topic: string[]
+  updated_at: number
+}
+
+/** Incoming browse request notification (sent to the handler to serve content). */
+export interface BrowseRequestEvent {
+  requestId: string
+  fromNodeId: string
+  collection?: string
+  since?: number
+  limit: number
+}
+
+/** Parameters for the browse.from RPC (client-side). */
+export interface BrowseFromParams {
+  targetNodeId: string
+  directAddrs?: string[]
+  relayUrl?: string
+  collection?: string
+  since?: number
+  limit?: number
+}
+
 /** Parameters for sending mail via Iroh QUIC. */
 export interface MailSendParams {
   /** Recipient's Iroh EndpointId string */
@@ -317,6 +345,47 @@ export class EngineBridge extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Browse RPC methods
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Make a browse request to a remote peer.
+   * Returns content stubs from that peer's public store.
+   */
+  async browseFrom(params: BrowseFromParams): Promise<{ stubs: BrowseStub[]; has_more: boolean }> {
+    const result = await this.call<{ stubs: BrowseStub[]; has_more: boolean }>('browse.from', {
+      target_node_id: params.targetNodeId,
+      direct_addrs: params.directAddrs,
+      relay_url: params.relayUrl,
+      collection: params.collection,
+      since: params.since,
+      limit: params.limit,
+    })
+    return result
+  }
+
+  /**
+   * Respond to an incoming browse request (serve local content stubs).
+   * Called by the daemon when `onBrowseRequest` fires.
+   */
+  async browseRespond(requestId: string, stubs: BrowseStub[], hasMore: boolean): Promise<void> {
+    await this.call('browse.respond', {
+      request_id: requestId,
+      stubs,
+      has_more: hasMore,
+    })
+  }
+
+  /**
+   * Register a handler for incoming browse requests from remote peers.
+   * The handler must call `browseRespond(event.requestId, stubs, hasMore)`.
+   */
+  onBrowseRequest(handler: (event: BrowseRequestEvent) => void): () => void {
+    this.on('browse.request', handler)
+    return () => this.off('browse.request', handler)
+  }
+
+  // ---------------------------------------------------------------------------
   // Gossip RPC methods
   // ---------------------------------------------------------------------------
 
@@ -451,6 +520,24 @@ export class EngineBridge extends EventEmitter {
           fromNodeId: params.from_node_id,
         }
         this.emit('mail.received', event)
+        break
+      }
+      case 'browse.request': {
+        const params = notif.params as {
+          request_id: string
+          from_node_id: string
+          collection?: string
+          since?: number
+          limit: number
+        }
+        const event: BrowseRequestEvent = {
+          requestId: params.request_id,
+          fromNodeId: params.from_node_id,
+          collection: params.collection,
+          since: params.since,
+          limit: params.limit,
+        }
+        this.emit('browse.request', event)
         break
       }
       default:
