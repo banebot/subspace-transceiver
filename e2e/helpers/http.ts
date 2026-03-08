@@ -255,6 +255,14 @@ export class DaemonClient {
     await this.req('POST', '/discovery/introduce', { nodeId })
   }
 
+  /**
+   * Introduce a remote peer to ALL gossip topics (discovery + all PSK replication).
+   * This is the canonical way to bootstrap connectivity between two agents.
+   */
+  async introduceToAll(nodeId: string, networkId?: string): Promise<void> {
+    await this.req('POST', '/peer/introduce', { nodeId, ...(networkId ? { networkId } : {}) })
+  }
+
   /** Browse a remote peer's public content stubs. */
   async browse(
     peerId: string,

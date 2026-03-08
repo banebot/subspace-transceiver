@@ -572,7 +572,13 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     if (body.network) {
       session = state.sessions.get(body.network)
     } else {
-      session = state.sessions.values().next().value as NetworkSession | undefined
+      // Use the most recently joined session (last in insertion order) so
+      // tests that add a second PSK in the same process don't accidentally
+      // write to the stale first session.
+      const sessionIter = state.sessions.values()
+      let lastSession: NetworkSession | undefined
+      for (const s of sessionIter) lastSession = s
+      session = lastSession
     }
 
     if (!session) {
@@ -1164,6 +1170,56 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
         s.discovery.addDiscoveryPeer(body.nodeId!).catch(() => {})
       )
     )
+    return reply.status(204).send()
+  })
+
+  // POST /peer/introduce — introduce a remote peer to ALL gossip topics
+  // (discovery + all PSK replication topics). This is the primary way to
+  // bootstrap connectivity between two agents who know each other's NodeIds.
+  // ---------------------------------------------------------------------------
+  app.post('/peer/introduce', async (req, reply) => {
+    const body = req.body as { nodeId?: string; networkId?: string }
+    if (!body.nodeId) {
+      return reply.status(400).send({ error: '"nodeId" is required', code: 'INVALID_REQUEST' })
+    }
+    const nodeId = body.nodeId
+    const bridge = state.globalSession?.bridge
+
+    if (!bridge?.isRunning) {
+      return reply.status(503).send({ error: 'Engine not running', code: 'ENGINE_NOT_READY' })
+    }
+
+    const errors: string[] = []
+
+    // 1. Discovery gossip topic
+    if (state.globalSession) {
+      await state.globalSession.discovery.addDiscoveryPeer(nodeId).catch(e => errors.push(String(e)))
+    }
+    for (const s of state.sessions.values()) {
+      await s.discovery.addDiscoveryPeer(nodeId).catch(() => {})
+    }
+
+    // 2. PSK replication gossip topics
+    // If networkId is specified, only introduce to that specific session.
+    // Otherwise, introduce to ALL sessions (legacy behavior for simple 2-agent setups).
+    const sessionsToIntroduce = body.networkId
+      ? [state.sessions.get(body.networkId)].filter(Boolean) as NetworkSession[]
+      : [...state.sessions.values()]
+
+    for (const session of sessionsToIntroduce) {
+      await bridge.gossipJoin({
+        topicHex: session.gossipTopicHex,
+        bootstrapPeers: [nodeId],
+      }).catch(e => errors.push(String(e)))
+      // Reset the sync version so the next broadcast delivers the full
+      // current state to the newly introduced peer (otherwise it might
+      // receive an empty delta if lastSyncVersion is already current).
+      session.replication?.resetSyncVersion()
+    }
+
+    if (errors.length > 0) {
+      return reply.status(500).send({ error: errors.join('; '), code: 'INTRODUCE_PARTIAL' })
+    }
     return reply.status(204).send()
   })
 

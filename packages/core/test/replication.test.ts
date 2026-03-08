@@ -35,6 +35,11 @@ class MockEngineBridge extends EventEmitter {
     }
   }
 
+  onGossipNeighborUp(_cb: (event: { topicHex: string; nodeId: string }) => void): () => void {
+    // No-op in tests — neighbor up events are not simulated
+    return () => {}
+  }
+
   /** Simulate receiving a gossip message from a peer */
   injectGossipMessage(msg: GossipMessage): void {
     for (const listener of this.gossipListeners) {

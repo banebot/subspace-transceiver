@@ -119,6 +119,7 @@ pub mod methods {
     pub const NOTIFY_PEER_CONNECTED: &str = "peer.connected";
     pub const NOTIFY_PEER_DISCONNECTED: &str = "peer.disconnected";
     pub const NOTIFY_GOSSIP_RECEIVED: &str = "gossip.received";
+    pub const NOTIFY_GOSSIP_NEIGHBOR_UP: &str = "gossip.neighbor_up";
     pub const NOTIFY_MAIL_RECEIVED: &str = "mail.received";
     pub const NOTIFY_BROWSE_REQUEST: &str = "browse.request";
     pub const NOTIFY_READY: &str = "engine.ready";

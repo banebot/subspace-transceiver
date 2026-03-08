@@ -271,6 +271,31 @@ export class TestHarness {
     )
 
     const networkId = results[0].id
+
+    // Bootstrap peer introduction: share NodeIds so gossip can form a mesh.
+    // Each agent introduces every other agent to their gossip topics
+    // (discovery + PSK replication). Without this, gossip topics have no
+    // bootstrap peers and agents can't find each other.
+    if (names.length > 1) {
+      const nodeIds = await Promise.all(
+        names.map(async (name) => {
+          const h = await this.client(name).getHealth()
+          return { name, nodeId: h.nodeId as string | undefined }
+        })
+      )
+      for (const { name, nodeId } of nodeIds) {
+        if (!nodeId) continue
+        for (const { name: otherName, nodeId: otherNodeId } of nodeIds) {
+          if (name === otherName || !otherNodeId) continue
+          // name introduces otherName to the specific PSK network (not all sessions)
+          await this.client(name).introduceToAll(otherNodeId, networkId).catch(() => {})
+        }
+      }
+      // Wait for gossip mesh to form before returning — prevents "write before
+      // gossip is ready" races in tests that write immediately after joinAllToPsk().
+      await sleep(2000)
+    }
+
     return { psk: effectivePsk, networkId }
   }
 
@@ -280,9 +305,26 @@ export class TestHarness {
    * With Iroh transport, peers connect via relay and QUIC automatically.
    * This is a no-op kept for API compatibility — Iroh handles connectivity.
    */
-  async connectPskPeers(_networkId: string, _names: string[]): Promise<void> {
-    // Iroh manages QUIC connections natively via gossip topic membership.
-    // No manual peer wiring is required.
+  async connectPskPeers(networkId: string, names: string[]): Promise<void> {
+    // Re-introduce agents to each other for the specific PSK network.
+    // This is needed after partition/restart when peers lose their bootstrap
+    // peer information. With NeighborUp-based resetSyncVersion, gossip
+    // connecting will trigger a full-state resync.
+    const nodeIds = await Promise.all(
+      names.map(async (name) => {
+        const h = await this.client(name).getHealth()
+        return { name, nodeId: h.nodeId as string | undefined }
+      })
+    )
+    for (const { name, nodeId } of nodeIds) {
+      if (!nodeId) continue
+      for (const { name: otherName, nodeId: otherNodeId } of nodeIds) {
+        if (name === otherName || !otherNodeId) continue
+        await this.client(name).introduceToAll(otherNodeId, networkId).catch(() => {})
+      }
+    }
+    // Let gossip mesh form
+    await sleep(2000)
   }
 
   /**

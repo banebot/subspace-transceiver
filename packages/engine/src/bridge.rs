@@ -176,8 +176,13 @@ impl Bridge {
             Err(e) => return RpcResponse::error(id, RpcError::internal(e.to_string())),
         };
 
-        // Build gossip (synchronous)
-        let gossip = Arc::new(Gossip::builder().spawn(endpoint.clone()));
+        // Build gossip with a generous message size limit (default 4096 is too
+        // small for Loro CRDT deltas from multiple chunks).
+        let gossip = Arc::new(
+            Gossip::builder()
+                .max_message_size(1024 * 1024) // 1 MiB
+                .spawn(endpoint.clone()),
+        );
 
         // Build mailbox protocol handler (shares the notification channel with the bridge)
         let mailbox_handler = MailboxHandler {
@@ -354,15 +359,25 @@ impl Bridge {
                 tokio::spawn(async move {
                     use base64::Engine as _;
                     while let Some(msg) = receiver.recv().await {
-                        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&msg.payload);
-                        let notification = RpcNotification::new(
-                            methods::NOTIFY_GOSSIP_RECEIVED,
-                            json!({
-                                "topic_hex": msg.topic_hex,
-                                "payload_b64": payload_b64,
-                                "from_node_id": msg.from_node_id,
-                            }),
-                        );
+                        let notification = if msg.is_neighbor_up {
+                            RpcNotification::new(
+                                methods::NOTIFY_GOSSIP_NEIGHBOR_UP,
+                                json!({
+                                    "topic_hex": msg.topic_hex,
+                                    "node_id": msg.from_node_id,
+                                }),
+                            )
+                        } else {
+                            let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&msg.payload);
+                            RpcNotification::new(
+                                methods::NOTIFY_GOSSIP_RECEIVED,
+                                json!({
+                                    "topic_hex": msg.topic_hex,
+                                    "payload_b64": payload_b64,
+                                    "from_node_id": msg.from_node_id,
+                                }),
+                            )
+                        };
                         if notify_tx.send(notification).is_err() {
                             break; // Bridge shutting down
                         }

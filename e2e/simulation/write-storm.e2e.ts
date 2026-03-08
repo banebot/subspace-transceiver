@@ -21,6 +21,9 @@ describe('C.1: Concurrent write storm', () => {
   })
 
   it('2 agents × 100 chunks converge to 200 identical chunks', async () => {
+    // Note: 200 concurrent HTTP writes can take 60-80s on a loaded system.
+    // This test is intentionally heavy — it validates that 100-chunk write storms
+    // don't lose data, not that they converge fast.
     await harness.joinAllToPsk()
 
     const CHUNKS_PER_AGENT = 100
@@ -54,7 +57,7 @@ describe('C.1: Concurrent write storm', () => {
           const chunks = await harness.client(agent).queryMemory({ topics: ['write-storm'] })
           return chunks.length >= CHUNKS_PER_AGENT * 2
         },
-        60_000,
+        90_000,
         `${agent} to have ${CHUNKS_PER_AGENT * 2} chunks`
       )
     }
@@ -71,5 +74,5 @@ describe('C.1: Concurrent write storm', () => {
 
     expect(alphaIds).toEqual(betaIds)
     expect(alphaIds.length).toBe(CHUNKS_PER_AGENT * 2)
-  }, 90_000)
+  }, 120_000)
 })

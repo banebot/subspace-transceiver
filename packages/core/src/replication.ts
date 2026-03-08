@@ -47,6 +47,7 @@ export class ReplicationManager {
   // Cleanup handles
   private gossipUnsub: (() => void) | null = null
   private storeListeners: Array<() => void> = []
+  private resyncTimer: ReturnType<typeof setInterval> | null = null
   private stopped = false
 
   constructor(
@@ -80,6 +81,37 @@ export class ReplicationManager {
       if (msg.topicHex !== this.gossipTopicHex) return
       this.handleIncomingMessage(msg)
     })
+
+    // --- Gossip NeighborUp: reset sync version so the new peer gets full state ---
+    // When a peer joins the gossip mesh, reset lastSyncVersion so the next
+    // periodic resync (or debounced broadcast) sends the FULL snapshot.
+    // This is the correct fix for "late-joining peer" scenarios: the full
+    // snapshot is only sent AFTER the gossip connection is established.
+    const neighborUnsub = this.bridge.onGossipNeighborUp((event) => {
+      if (event.topicHex !== this.gossipTopicHex) return
+      this.resetSyncVersion()
+    })
+    this.storeListeners.push(neighborUnsub)
+
+    // --- Periodic re-sync: broadcast current state every 5s ---
+    // This ensures that if the first broadcast was lost (gossip mesh not yet
+    // formed when the chunk was written), the next periodic sync delivers it.
+    const RESYNC_INTERVAL = parseInt(process.env.SUBSPACE_REPLICATION_INTERVAL_MS ?? '5000', 10)
+    this.resyncTimer = setInterval(() => {
+      void this.broadcastDelta('skill')
+      void this.broadcastDelta('project')
+    }, RESYNC_INTERVAL)
+  }
+
+  /**
+   * Reset the sync version so the next broadcast sends the full current state.
+   * Call this when a new peer joins the gossip mesh to ensure they receive
+   * all existing data even if the node has been running for a while.
+   */
+  resetSyncVersion(): void {
+    // Reset lastSyncVersion to undefined so the next periodic resync
+    // (or any triggered broadcast) sends the full current state.
+    this.lastSyncVersion = { skill: undefined, project: undefined }
   }
 
   /**
@@ -89,6 +121,10 @@ export class ReplicationManager {
     this.stopped = true
     if (this.pendingBroadcast.skill) clearTimeout(this.pendingBroadcast.skill)
     if (this.pendingBroadcast.project) clearTimeout(this.pendingBroadcast.project)
+    if (this.resyncTimer) {
+      clearInterval(this.resyncTimer)
+      this.resyncTimer = null
+    }
     for (const unsub of this.storeListeners) unsub()
     this.storeListeners = []
     if (this.gossipUnsub) {
@@ -115,10 +151,11 @@ export class ReplicationManager {
     if (this.stopped) return
     try {
       const store = this.stores[namespace]
-      const delta = store.exportDelta(this.lastSyncVersion[namespace])
+      const since = this.lastSyncVersion[namespace]
+      const delta = store.exportDelta(since)
 
-      // Update our sync version to current state (lightweight snapshot)
-      this.lastSyncVersion[namespace] = store.getVersionSnapshot()
+      // Build envelope BEFORE updating lastSyncVersion so we can retry on failure
+      const newVersion = store.getVersionSnapshot()
 
       const envelope: DeltaEnvelope = {
         type: ENVELOPE_TYPE,
@@ -129,6 +166,11 @@ export class ReplicationManager {
 
       const payloadBytes = Buffer.from(JSON.stringify(envelope), 'utf8')
       await this.bridge.gossipBroadcast(this.gossipTopicHex, payloadBytes)
+
+      // Only advance lastSyncVersion AFTER successful broadcast.
+      // If the broadcast fails, the next periodic resync will retry from the
+      // same starting point (no data loss).
+      this.lastSyncVersion[namespace] = newVersion
     } catch (err) {
       console.warn(`[subspace:replication] Failed to broadcast ${namespace} delta:`, err)
     }

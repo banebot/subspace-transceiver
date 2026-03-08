@@ -434,6 +434,15 @@ export class EngineBridge extends EventEmitter {
   }
 
   /**
+   * Register a callback for gossip neighbor-up events.
+   * Fired when a new peer joins the gossip mesh on a topic.
+   */
+  onGossipNeighborUp(handler: (event: { topicHex: string; nodeId: string }) => void): () => void {
+    this.on('gossip.neighbor_up', handler)
+    return () => this.off('gossip.neighbor_up', handler)
+  }
+
+  /**
    * Register a callback for peer connection events.
    */
   onPeerConnected(handler: (event: PeerConnectedEvent) => void): () => void {
@@ -502,6 +511,11 @@ export class EngineBridge extends EventEmitter {
           fromNodeId: params.from_node_id,
         }
         this.emit('gossip.received', msg)
+        break
+      }
+      case 'gossip.neighbor_up': {
+        const params = notif.params as { topic_hex: string; node_id: string }
+        this.emit('gossip.neighbor_up', { topicHex: params.topic_hex, nodeId: params.node_id })
         break
       }
       case 'peer.connected':

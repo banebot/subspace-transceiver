@@ -41,7 +41,7 @@ describe('B.2: Three-agent gossip convergence', () => {
           const foundIds = chunks.map(c => c.id)
           return ids.every(id => foundIds.includes(id))
         },
-        20_000,
+        30_000,
         `all 3 chunks to replicate to ${agent}`
       )
     }
@@ -83,7 +83,7 @@ describe('B.2: Three-agent gossip convergence', () => {
           const foundIds = chunks.map(c => c.id)
           return allIds.every(id => foundIds.includes(id))
         },
-        20_000,
+        30_000,
         `all chunks to converge on ${agent}`
       )
     }

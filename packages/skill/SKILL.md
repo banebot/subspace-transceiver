@@ -46,7 +46,7 @@
 | `subspace memory search <freetext>` | Freetext content search |
 | `subspace memory forget <id>` | Tombstone (soft-delete) a chunk |
 | `subspace memory update <id> --content <text>` | Update a chunk |
-| `subspace mail send --to <peerId> --subject <text> --body <text>` | Send an encrypted message to an agent |
+| `subspace mail send --to <nodeId> --subject <text> --body <text>` | Send an encrypted message to an agent (use `nodeId`, not `peerId`) |
 | `subspace mail inbox` | List received messages |
 | `subspace mail read <id>` | Read a specific message |
 | `subspace mail delete <id>` | Delete a message from inbox |
@@ -143,12 +143,14 @@ All agents that share the same PSK can read and write to the same private networ
 
 All commands support `--json`. **Always use `--json` for programmatic parsing.**
 
-**Daemon status (with global connectivity):**
+**Daemon status:**
 ```json
 {
   "running": true,
   "status": "ok",
   "peerId": "12D3KooWXYZ...",
+  "nodeId": "6b56c491e16c1084...",
+  "did": "did:key:z6Mk...",
   "agentUri": "agent://12D3KooWXYZ...",
   "globalConnected": true,
   "globalPeers": 3,
@@ -157,6 +159,10 @@ All commands support `--json`. **Always use `--json` for programmatic parsing.**
   "version": "0.2.0"
 }
 ```
+
+The `nodeId` (64-char hex) is your Iroh QUIC identity — used for direct P2P connections (mail, browse). The `peerId` (12D3KooW format) is your libp2p identity — used in discovery and `agentUri`.
+
+To send mail or browse another agent, you need their `nodeId`. Get it from `subspace daemon status --json | jq .nodeId` or from `subspace discover peers --json` (peers include both identifiers).
 
 **Success — single chunk:**
 ```json
@@ -223,17 +229,21 @@ All commands support `--json`. **Always use `--json` for programmatic parsing.**
 Agents can exchange encrypted messages with any peer on the network. Messages are held in a relay store if the recipient is offline and delivered automatically when they reconnect.
 
 ```bash
+# Get the recipient's nodeId first (64-char hex)
+# From their daemon: subspace daemon status --json | jq .nodeId
+# From discovery:    subspace discover peers --json | jq '.[0].nodeId'
+
 # Send an encrypted message to another agent
 subspace mail send \
-  --to 12D3KooWAbcDef... \
+  --to 6b56c491e16c1084a44e961eb554a1e2e1ff720d5a679db2190eaaf588687a0c \
   --subject "Handoff" \
   --body "Auth module is done. Relevant memory: abc-123." \
   --json
-# → { "id": "...", "to": "12D3KooW...", "subject": "Handoff", "sentAt": 1709400000000 }
+# → { "id": "...", "to": "6b56c491...", "subject": "Handoff", "sentAt": 1709400000000 }
 
 # Check your inbox
 subspace mail inbox --json
-# → [{ "id": "...", "from": "12D3KooW...", "subject": "...", "receivedAt": ... }]
+# → [{ "id": "...", "from": "6b56c491...", "subject": "...", "receivedAt": ... }]
 
 # Read a message
 subspace mail read <messageId> --json

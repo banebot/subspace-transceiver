@@ -145,7 +145,7 @@ describe('store isolation after PSK leave', () => {
     const pskA = randomPsk()
     const pskB = randomPsk()
 
-    await harness.client('alpha').joinNetwork(pskA)
+    const netA = await harness.client('alpha').joinNetwork(pskA)
     await harness.client('alpha').putMemory({
       type: 'skill',
       topic: ['psk-a-data'],
@@ -153,7 +153,7 @@ describe('store isolation after PSK leave', () => {
       confidence: 0.9,
     })
 
-    await harness.client('alpha').leaveNetwork(pskA)
+    await harness.client('alpha').leaveNetwork(netA.id)
     await harness.client('alpha').joinNetwork(pskB)
 
     const results = await harness.client('alpha').searchMemory('data only in PSK-A')

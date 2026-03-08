@@ -68,7 +68,9 @@ describe('C.4: Join/leave cycling', () => {
   }, 60_000)
 
   it('second agent joining same PSK sees all chunks after cycling', async () => {
-    await harness.joinAllToPsk(psk, ['beta'])
+    // Join beta to the SAME psk alpha is on, and introduce them to each other.
+    // We list both agents so the harness can exchange NodeIds for gossip bootstrap.
+    await harness.joinAllToPsk(psk, ['alpha', 'beta'])
 
     await pollUntil(
       async () => {
