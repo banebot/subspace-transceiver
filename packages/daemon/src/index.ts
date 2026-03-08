@@ -25,7 +25,7 @@ import {
   ReputationStore,
   StampCache,
   type LoroEpochManager,
-  RELAY_ADDRESSES,
+  IROH_PUBLIC_RELAYS,
   registerMailboxProtocol,
   CapabilityRegistry,
   registerNegotiateProtocol,
@@ -173,7 +173,7 @@ async function main() {
   // Relay health check — warn early if relay DNS is dead or unconfigured
   // ---------------------------------------------------------------------------
   const effectiveRelayAddresses =
-    config.relayAddresses.length > 0 ? config.relayAddresses : RELAY_ADDRESSES
+    config.relayAddresses.length > 0 ? config.relayAddresses : [...IROH_PUBLIC_RELAYS]
   await checkRelayHealth(effectiveRelayAddresses)
 
   // ---------------------------------------------------------------------------
@@ -206,7 +206,7 @@ async function main() {
   // PSK networks (joinNetwork calls below) are overlays on top of this.
   let globalSession: GlobalSession | null = null
   try {
-    globalSession = await joinGlobalNetwork(identity.privateKey, {
+    globalSession = await joinGlobalNetwork(identity, {
       displayName: config.displayName,
       minConnections: config.security.minPeerConnections,
       trustedBootstrapPeers: config.security.trustedBootstrapPeers,
@@ -262,10 +262,10 @@ async function main() {
   // ---------------------------------------------------------------------------
   const capabilityRegistry = new CapabilityRegistry()
 
-  // Register negotiate protocol on the global session node
+  // Register negotiate protocol (bridge-based in Phase 3.5)
   if (globalSession) {
     registerNegotiateProtocol(
-      globalSession.node,
+      globalSession.bridge,
       capabilityRegistry,
       identity.peerId,
       identity.did,
@@ -281,7 +281,7 @@ async function main() {
     getDID: () => identity.did,
     capabilityRegistry,
     startedAt: Date.now(),
-    agentPrivateKey: identity.privateKey,
+    agentIdentity: identity,
     rateLimiter: new RateLimiter({
       maxPerWindow: config.security.maxChunksPerPeerPerWindow,
       windowMs: config.security.rateLimitWindowMs,
@@ -301,7 +301,7 @@ async function main() {
   // ---------------------------------------------------------------------------
   for (const netConfig of config.networks) {
     try {
-      const session = await joinNetwork(netConfig.psk, identity.privateKey, {
+      const session = await joinNetwork(netConfig.psk, identity, {
         name: netConfig.name,
         dataDir: config.dataDir,
         displayName: config.displayName,
@@ -357,15 +357,15 @@ async function main() {
   // ---------------------------------------------------------------------------
   let mailPollHandle: ReturnType<typeof setInterval> | null = null
   if (config.mailbox.enabled && mailStores) {
-    // Register the mailbox libp2p protocol on the global node
-    const mailNode = state.globalSession?.node ?? [...sessions.values()][0]?.node
-    if (mailNode) {
+    // Register the mailbox protocol via EngineBridge
+    const mailBridge = state.globalSession?.bridge ?? null
+    {
       try {
-        await registerMailboxProtocol(mailNode, {
+        await registerMailboxProtocol(mailBridge, {
           relayStore: mailStores.relay,
           inboxStore: mailStores.inbox,
           recipientPeerId: identity.peerId,
-          recipientKey: identity.privateKey,
+          recipientKey: identity.privateKey as Parameters<typeof registerMailboxProtocol>[1]['recipientKey'],
           autoDecrypt: true,
           maxCheckResults: 50,
         })
@@ -376,14 +376,13 @@ async function main() {
 
       // Poll for pending mail on startup and periodically
       const doPoll = async () => {
-        const relayPeers = [
-          ...(state.globalSession?.node.getPeers() ?? []),
-          ...[...sessions.values()].flatMap(s => s.node.getPeers()),
+        const relayPeers: string[] = [
+          ...(mailBridge?.isRunning ? await mailBridge.peerList() : []),
         ]
         if (relayPeers.length > 0 && mailStores) {
-          const newMail = await pollMail(mailNode, relayPeers, {
+          const newMail = await pollMail(mailBridge, relayPeers, {
             recipientPeerId: identity.peerId,
-            recipientKey: identity.privateKey,
+            recipientKey: identity.privateKey as Parameters<typeof pollMail>[2]['recipientKey'],
             inboxStore: mailStores.inbox,
           })
           if (newMail > 0) {

@@ -1,0 +1,54 @@
+[package]
+name = "subspace-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Iroh-based P2P transport engine for Subspace Transceiver"
+license = "MIT"
+
+[[bin]]
+name = "subspace-engine"
+path = "src/main.rs"
+
+[lib]
+name = "subspace_engine"
+path = "src/lib.rs"
+
+[dependencies]
+# Iroh P2P transport
+iroh = "0.96"
+iroh-gossip = "0.96"
+iroh-base = "0.96"
+
+# Futures utilities
+futures-util = "0.3"
+
+# Bytes type
+bytes = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Base64 encoding (for gossip payload in bridge)
+base64 = "0.22"
+
+# Hex encoding
+hex = "0.4"
+
+# Async trait support
+async-trait = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

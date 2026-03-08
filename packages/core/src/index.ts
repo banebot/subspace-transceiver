@@ -89,8 +89,6 @@ export { BacklinkIndex } from './backlink-index.js'
 // Discovery + browse protocol
 export {
   DiscoveryManager,
-  DISCOVERY_TOPIC,
-  BROWSE_PROTOCOL,
 } from './discovery.js'
 export type {
   DiscoveryManifest,
@@ -144,21 +142,32 @@ export type { EpochConfig, EpochInfo, DropResult } from './epoch-manager.js'
 // Query utilities (exposed for daemon scan handler)
 export { buildOrbitFilter, resolveHeads, applyQuery } from './query.js'
 
-// Protocol
+// Protocol (ALPN identifiers + message encoding)
 export {
   QUERY_PROTOCOL,
+  BROWSE_PROTOCOL,
+  MANIFEST_PROTOCOL,
+  MAILBOX_PROTOCOL,
+  NEGOTIATE_PROTOCOL,
+  DISCOVERY_TOPIC,
   encodeMessage,
   decodeMessage,
+  deriveGossipTopic,
   sendQuery,
 } from './protocol.js'
 export type { QueryRequest, QueryResponse } from './protocol.js'
 
-// Bootstrap constants
-export { BOOTSTRAP_ADDRESSES, RELAY_ADDRESSES } from './bootstrap.js'
+// Bootstrap / relay configuration
+export {
+  IROH_PUBLIC_RELAYS,
+  getRelayUrl,
+  parseBootstrapPeer,
+} from './bootstrap.js'
+export type { BootstrapPeer } from './bootstrap.js'
 
-// Node factory (exposed for tests and advanced usage)
-export { createLibp2pNode, derivePeerId } from './node.js'
-export type { CreateNodeOptions, LibP2pNodeWithPruner } from './node.js'
+// Iroh node factory
+export { createIrohNode, derivePeerId } from './node.js'
+export type { IrohNode, IrohNodeOptions } from './node.js'
 
 // Connection pruner — disconnects inbound non-Subspace peers after graceMs
 export { SubspaceConnectionPruner } from './connection-pruner.js'
@@ -166,7 +175,6 @@ export type { ConnectionPrunerOptions } from './connection-pruner.js'
 
 // ANP-compatible meta-protocol capability negotiation
 export {
-  NEGOTIATE_PROTOCOL,
   CapabilityRegistry,
   BUILT_IN_CAPABILITIES,
   registerNegotiateProtocol,
@@ -217,7 +225,6 @@ export type { ISchemaRegistry, ValidationResult as SchemaValidationResult } from
 
 // Mail — store-and-forward messaging for offline agents
 export {
-  MAILBOX_PROTOCOL,
   encryptMailPayload,
   decryptMailEnvelope,
   signEnvelope,
@@ -251,6 +258,19 @@ export {
   pollMail,
 } from './mail-protocol.js'
 export type { MailboxHandlerOptions, SendMailOptions } from './mail-protocol.js'
+
+// Iroh engine bridge (stdio JSON-RPC to Rust P2P engine)
+export {
+  EngineBridge,
+  getDefaultBridge,
+  _resetDefaultBridge,
+} from './engine-bridge.js'
+export type {
+  EngineBridgeOptions,
+  EngineStartResult,
+  GossipMessage,
+  PeerConnectedEvent,
+} from './engine-bridge.js'
 
 // Hashcash proof-of-work (TODO-4e34c409)
 export {

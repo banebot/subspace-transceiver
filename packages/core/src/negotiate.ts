@@ -30,8 +30,7 @@
  * without a full ANP implementation.
  */
 
-import type { Libp2p } from 'libp2p'
-import * as lp from 'it-length-prefixed'
+import type { EngineBridge } from './engine-bridge.js'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -104,13 +103,13 @@ export const BUILT_IN_CAPABILITIES: CapabilityDeclaration[] = [
     nsid: 'net.subspace.memory.skill',
     version: '2.0.0',
     role: 'both',
-    metadata: { store: 'loro-crdt', transport: 'libp2p' },
+    metadata: { store: 'loro-crdt', transport: 'iroh' },
   },
   {
     nsid: 'net.subspace.memory.project',
     version: '2.0.0',
     role: 'both',
-    metadata: { store: 'loro-crdt', transport: 'libp2p' },
+    metadata: { store: 'loro-crdt', transport: 'iroh' },
   },
   {
     nsid: 'net.subspace.protocol.query',
@@ -219,14 +218,8 @@ export class CapabilityRegistry {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Internal stream helpers (libp2p v3 API)
+// JSON helpers
 // ---------------------------------------------------------------------------
-
-interface Libp2pV3Stream extends AsyncIterable<Uint8Array | { subarray(): Uint8Array }> {
-  send(data: Uint8Array | Uint8Array[]): boolean
-  close(opts?: { signal?: AbortSignal }): Promise<void>
-  abort(err: Error): void
-}
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
@@ -239,121 +232,56 @@ function decodeJSON<T>(data: Uint8Array): T {
   return JSON.parse(textDecoder.decode(data)) as T
 }
 
-async function streamSend(stream: Libp2pV3Stream, source: AsyncIterable<Uint8Array>): Promise<void> {
-  for await (const chunk of source) {
-    const drained = stream.send(chunk)
-    if (!drained) {
-      await new Promise<void>((resolve) => {
-        ;(stream as unknown as { addEventListener(e: string, h: () => void, o?: { once?: boolean }): void })
-          .addEventListener('drain', resolve, { once: true })
-      })
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Protocol handler registration
 // ---------------------------------------------------------------------------
 
 /**
- * Register the `/subspace/negotiate/1.0.0` protocol handler on a libp2p node.
+ * Register the `/subspace/negotiate/1.0.0` protocol handler.
  *
- * When a peer dials this protocol, this handler responds with the full
- * capability list (or filtered by the request's `filter` field).
+ * In the Iroh world, protocol handlers are registered via the Router in the
+ * Rust engine. This function stores the handler locally so the HTTP API can
+ * serve capability queries directly — no peer-to-peer negotiation needed
+ * for local queries.
  *
- * @param node      libp2p node to register the protocol on
+ * @param _bridge   EngineBridge (unused — protocol handled at HTTP API layer)
  * @param registry  Capability registry to query
- * @param peerId    This agent's PeerId string
+ * @param peerId    This agent's EndpointId / DID:Key
  * @param did       This agent's DID:Key string
  */
 export function registerNegotiateProtocol(
-  node: Libp2p,
+  _bridge: EngineBridge | null,
   registry: CapabilityRegistry,
   peerId: string,
   did: string,
 ): void {
-  ;(node as unknown as { handle(p: string, h: (stream: unknown, conn: unknown) => Promise<void>): void })
-    .handle(NEGOTIATE_PROTOCOL, async (rawStream: unknown) => {
-    const stream = rawStream as unknown as Libp2pV3Stream
-    try {
-      // Read the request (length-prefixed JSON)
-      let request: NegotiateRequest | null = null
-      for await (const chunk of lp.decode(stream as AsyncIterable<Uint8Array>)) {
-        try {
-          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
-          request = decodeJSON<NegotiateRequest>(bytes)
-        } catch {
-          // Malformed request — respond with full capability list
-        }
-        break
-      }
-
-      const capabilities = registry.list(request?.filter)
-      const response: NegotiateResponse = {
-        protocolVersion: '1.0.0',
-        agentDID: did,
-        peerId,
-        capabilities,
-        timestamp: Date.now(),
-      }
-
-      async function* responseSource() { yield encodeJSON(response) }
-      await streamSend(stream, lp.encode(responseSource()))
-    } catch {
-      // Ignore errors on individual connections
-    } finally {
-      await stream.close().catch(() => {})
-    }
-  })
+  // In the Iroh architecture, negotiate protocol is handled at the HTTP API
+  // layer (/capabilities and /capabilities/anp endpoints in api.ts).
+  // The Rust engine handles the ALPN-level protocol routing.
+  // Nothing to register here — the HTTP endpoints use the registry directly.
+  void registry; void peerId; void did
 }
 
 /**
- * Query a peer's capabilities by dialing the negotiate protocol.
+ * Query a peer's capabilities.
  *
- * @param node          libp2p node to use for the connection
- * @param targetPeerId  Peer ID to query
- * @param filter        Optional NSID prefix filter
- * @returns             NegotiateResponse from the peer, or null on failure
+ * In the Iroh architecture, this would dial the peer via Iroh QUIC and
+ * open an ALPN /subspace/negotiate/1.0.0 stream. For now this is a stub
+ * that returns null (full implementation in Phase 3.6).
+ *
+ * @param _bridge       EngineBridge for Iroh transport
+ * @param targetPeerId  Target peer's EndpointId or DID:Key
+ * @param _filter       Optional NSID prefix filter
  */
 export async function queryCapabilities(
-  node: Libp2p,
+  _bridge: EngineBridge | null,
   targetPeerId: string,
-  filter?: string,
+  _filter?: string,
 ): Promise<NegotiateResponse | null> {
-  try {
-    const { peerIdFromString } = await import('@libp2p/peer-id')
-    const peerId = peerIdFromString(targetPeerId)
-    const rawStream = await node.dialProtocol(peerId, NEGOTIATE_PROTOCOL, {
-      signal: AbortSignal.timeout(5000),
-    })
-    const stream = rawStream as unknown as Libp2pV3Stream
-
-    const request: NegotiateRequest = { protocolVersion: '1.0.0', filter }
-
-    try {
-      // Write request
-      async function* requestSource() { yield encodeJSON(request) }
-      await streamSend(stream, lp.encode(requestSource()))
-
-      // Read response
-      let response: NegotiateResponse | null = null
-      for await (const chunk of lp.decode(stream as AsyncIterable<Uint8Array>)) {
-        try {
-          const bytes = chunk instanceof Uint8Array ? chunk : (chunk as { subarray(): Uint8Array }).subarray()
-          response = decodeJSON<NegotiateResponse>(bytes)
-        } catch {
-          // Malformed response
-        }
-        break
-      }
-
-      return response
-    } finally {
-      await stream.close().catch(() => {})
-    }
-  } catch {
-    return null
-  }
+  // TODO Phase 3.6: implement via Iroh ALPN stream
+  // For now return null — callers must handle null gracefully
+  void targetPeerId
+  return null
 }
 
 // ---------------------------------------------------------------------------
