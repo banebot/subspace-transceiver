@@ -1,12 +1,9 @@
 /**
- * SubspaceAccessController — custom OrbitDB v2 access controller that validates
- * incoming CRDT oplog entries at the replication layer.
+ * SubspaceAccessController — validates incoming CRDT entries at the replication layer.
  *
  * ## Problem
- * OrbitDB's default IPFSAccessController only checks that the entry was signed by
- * a known OrbitDB identity. It does NOT validate the chunk's schema, content size,
- * or Ed25519 authorship. A malicious peer on the GossipSub topic can inject arbitrary
- * documents into the oplog, consuming disk space and crashing queries.
+ * Without access control, a malicious peer on the iroh-gossip topic can inject arbitrary
+ * documents into the Loro CRDT store, consuming disk space and crashing queries.
  *
  * ## Solution
  * This access controller validates every incoming PUT operation against:
@@ -19,13 +16,9 @@
  * empty string and the actual ciphertext lives in `encryptedContent`. This AC
  * validates the encrypted-document shape rather than the plaintext content field.
  *
- * ## OrbitDB integration
- * Register this controller ONCE at startup with `useAccessController(SubspaceAccessController)`,
- * then pass `AccessController: SubspaceAccessController(options)` to `orbitdb.open()`.
- *
- * The controller is stateless — no IPFS storage required, no manifest block fetched.
- * This makes it safe to use with private networks where storing manifest CIDs in the
- * public IPFS blockstore would leak metadata.
+ * ## Integration
+ * Called by ReplicationManager.handleIncomingMessage() before importDelta().
+ * The controller is stateless — no external storage required.
  */
 
 import { peerIdFromString } from '@libp2p/peer-id'

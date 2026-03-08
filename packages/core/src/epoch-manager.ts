@@ -1,10 +1,11 @@
 /**
  * Epoch utility functions and types.
  *
- * The OrbitDB-based EpochManager class has been replaced by LoroEpochManager
- * (see loro-epoch-manager.ts). This file retains the shared utility functions
- * and types used by both the new Loro epoch manager and external callers
- * (GC scheduler, API routes, daemon lifecycle).
+ * Shared utilities used by LoroEpochManager (loro-epoch-manager.ts)
+ * and external callers (GC scheduler, API routes, daemon lifecycle).
+ *
+ * The active implementation is LoroEpochManager — this file only contains
+ * the types and pure utility functions.
  */
 
 // ---------------------------------------------------------------------------

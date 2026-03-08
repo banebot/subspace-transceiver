@@ -61,7 +61,7 @@ export class CryptoError extends AgentNetError {
   }
 }
 
-/** Errors from the memory store layer (OrbitDB, validation, IO). */
+/** Errors from the memory store layer (Loro CRDT, validation, IO). */
 export class StoreError extends AgentNetError {
   constructor(message: string, code: ErrorCode, cause?: unknown) {
     super(message, code, cause)

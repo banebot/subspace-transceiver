@@ -1136,7 +1136,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // without waiting for the periodic broadcast interval.
   // ---------------------------------------------------------------------------
   app.post('/discovery/rebroadcast', async (_req, reply) => {
-    // Trigger GossipSub re-broadcast on all sessions
+    // Trigger iroh-gossip re-broadcast of discovery manifests on all sessions
     for (const session of state.sessions.values()) {
       session.discovery.triggerRebroadcast()
     }

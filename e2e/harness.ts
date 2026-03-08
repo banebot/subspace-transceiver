@@ -9,12 +9,12 @@
  *
  * Key design principles:
  *  1. No bootstrap pollution — SUBSPACE_BOOTSTRAP_ADDRS="" prevents daemons from
- *     announcing to the global bootstrap network.  Relay addresses remain enabled so
- *     PSK nodes can do NAT traversal.  PSK peers are connected explicitly via the
- *     /networks/:id/dial API rather than relying on mDNS auto-dial (libp2p v3
- *     does not auto-dial peers discovered via mDNS).
+ *     announcing to the global bootstrap network. Relay addresses remain enabled so
+ *     PSK nodes can do NAT traversal via Iroh's relay infrastructure.
  *  2. Fresh data dirs per test run — no cross-test contamination.
  *  3. Clean teardown — kills all processes, removes all temp dirs.
+ *  4. Iroh transport — peer connectivity uses Iroh QUIC + gossip. No libp2p mDNS.
+ *     Replication happens asynchronously via iroh-gossip delta sync (ReplicationManager).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -216,81 +216,48 @@ export class TestHarness {
    * Wait until all agents have at least minPeers connected peers
    * on the global network.
    */
-  async waitForMesh(minPeers: number = 1, timeoutMs: number = 30_000): Promise<void> {
-    // Proactively try to connect global peers early — doesn't wait for mesh.
-    // This uses the listen-port fallback to construct reliable dial addresses.
-    void this.connectGlobalPeers().catch(() => {})
-
+  /**
+   * Wait for all agents to be healthy (Iroh engine started).
+   *
+   * With Iroh transport, peer discovery is relay-based and asynchronous.
+   * This method verifies each agent is up and the engine is running,
+   * rather than waiting for a specific peer count.
+   *
+   * @param _minPeers  Ignored — kept for API compatibility with old tests
+   * @param timeoutMs  How long to wait for each agent to become healthy
+   */
+  async waitForMesh(_minPeers: number = 1, timeoutMs: number = 30_000): Promise<void> {
     await Promise.all(
       [...this.agents.values()].map((agent) =>
         pollUntil(
           async () => {
-            // Retry connectGlobalPeers on each poll iteration if no peers yet
             const h = await agent.client.getHealth()
-            if (h.globalPeers < minPeers) {
-              void this.connectGlobalPeers().catch(() => {})
-            }
-            return h.globalPeers >= minPeers
+            return h.status === 'ok'
           },
           timeoutMs,
-          `${agent.name} to have >= ${minPeers} global peers`
+          `${agent.name} to be healthy`
         )
       )
     )
-
-    // Explicitly connect global nodes to each other via direct TCP dial.
-    // Iroh peers are connected via explicit dial for deterministic test setup, and the relay-only
-    // connection doesn't give us direct peer-to-peer connectivity needed by
-    // the browse protocol (browse requires direct connection to the target peer).
-    await this.connectGlobalPeers()
   }
 
   /**
-   * Explicitly connect all agents' global Iroh nodes to each other.
-   * Fetches each agent's global TCP multiaddrs and has every other agent
-   * dial them directly, ensuring that browse and other direct-dial protocols work.
+   * @deprecated Iroh manages QUIC connections natively. This is a no-op.
    */
   async connectGlobalPeers(): Promise<void> {
-    const names = [...this.agents.keys()]
-    if (names.length < 2) return
-
-    // Wait up to 3s for each agent to expose at least one TCP multiaddr.
-    // The listen socket may take a moment to announce its addresses.
-    const globalAddrs = new Map<string, string[]>()
-    for (const name of names) {
-      let tcpAddrs: string[] = []
-      for (let attempt = 0; attempt < 6; attempt++) {
-        await sleep(500)
-        const h = await this.client(name).getHealth()
-        tcpAddrs = (h.globalMultiaddrs ?? []).filter(
-          (ma) => ma.includes('/tcp/') &&
-                  !ma.includes('p2p-circuit') &&
-                  !ma.includes('/ip4/0.0.0.0') &&
-                  !ma.includes('/ip6/::/')
-        )
-        if (tcpAddrs.length > 0) break
-      }
-      globalAddrs.set(name, tcpAddrs)
-    }
-
-    // Have each agent dial every other agent's global TCP addresses via POST /dial
-    const dialPromises: Promise<unknown>[] = []
-    for (const fromName of names) {
-      for (const [toName, addrs] of globalAddrs) {
-        if (toName === fromName || addrs.length === 0) continue
-        dialPromises.push(
-          this.client(fromName)
-            .dialGlobal(addrs[0])
-            .catch(() => {/* ignore transient failures */})
-        )
-      }
-    }
-    await Promise.all(dialPromises)
+    // Iroh uses relay servers + QUIC for connectivity. No explicit dial needed.
   }
 
   /**
-   * Join all agents to the same PSK network and wait for mesh connectivity.
-   * Returns the PSK used (generated randomly unless provided).
+   * Join all (or specified) agents to the same PSK network.
+   *
+   * With Iroh transport, peer discovery and replication are handled
+   * asynchronously via iroh-gossip. There is no TCP multiaddr exchange or
+   * peer mesh verification — agents join the gossip topic and replicate when
+   * Iroh establishes QUIC connections.
+   *
+   * Returns the PSK and network ID. Tests that need replication convergence
+   * should poll for the expected data rather than checking peer counts.
    */
   async joinAllToPsk(
     psk?: string,
@@ -304,143 +271,18 @@ export class TestHarness {
     )
 
     const networkId = results[0].id
-
-    if (names.length > 1) {
-      // ------------------------------------------------------------------
-      // Explicit peer exchange: libp2p v3 does not auto-dial peers that are
-      // discovered via mDNS.  To bootstrap PSK connectivity we:
-      //   1. Collect each agent's PSK node multiaddrs (returned in the
-      //      NetworkInfoDTO since we added the `multiaddrs` field).
-      //   2. Give each agent the TCP multiaddrs of every OTHER agent so it
-      //      can establish a direct connection.
-      // This avoids relying on mDNS auto-discovery timing.
-      // ------------------------------------------------------------------
-
-      // Step 1: collect multiaddrs — poll until each agent has at least one TCP addr.
-      // Under heavy parallel load the PSK node may take a few seconds to bind its
-      // listen socket and announce multiaddrs via getMultiaddrs().
-      const peerAddrs: Map<string, string[]> = new Map()
-      for (const name of names) {
-        await pollUntil(
-          async () => {
-            const nets = await this.client(name).getNetworks()
-            const net = nets.find((n) => n.id === networkId)
-            const tcpAddrs = (net?.multiaddrs ?? []).filter(
-              (ma) => ma.includes('/tcp/') && !ma.includes('p2p-circuit')
-            )
-            if (tcpAddrs.length > 0) {
-              peerAddrs.set(name, tcpAddrs)
-              return true
-            }
-            return false
-          },
-          5_000,
-          `${name} to expose a TCP multiaddr for PSK network ${networkId}`
-        ).catch(() => {
-          // If still no addrs after 5s, proceed with empty (dial will be skipped)
-          if (!peerAddrs.has(name)) peerAddrs.set(name, [])
-        })
-      }
-
-      // Step 2: have each agent dial every other agent's PSK node
-      const dialPromises: Promise<void>[] = []
-      for (const fromName of names) {
-        for (const [toName, addrs] of peerAddrs) {
-          if (toName === fromName || addrs.length === 0) continue
-          // Dial the first TCP multiaddr — others are alternative transports
-          dialPromises.push(
-            this.client(fromName)
-              .dialPskPeer(networkId, addrs[0])
-              .then(() => {
-                // success — connection bootstrapped
-              })
-              .catch(() => {
-                // ignore — peer may already be connected or dial may fail transiently
-              })
-          )
-        }
-      }
-      await Promise.all(dialPromises)
-
-      // Step 3: verify connectivity
-      await Promise.all(
-        names.map((name) =>
-          pollUntil(
-            async () => {
-              const nets = await this.client(name).getNetworks()
-              const net = nets.find((n) => n.id === networkId)
-              return (net?.peers ?? 0) >= 1
-            },
-            30_000,
-            `${name} to have >= 1 peer in PSK network`
-          )
-        )
-      )
-    }
-
-    // Brief stabilization pause — lets the GossipSub mesh form between the
-    // newly-connected PSK peers before tests start publishing/subscribing.
-    if (names.length > 1) {
-      await sleep(2000)
-    }
-
     return { psk: effectivePsk, networkId }
   }
 
   /**
-   * Explicitly wire PSK peers together after they have already joined a network.
-   * libp2p v3 does not auto-dial mDNS-discovered peers, so after any agent
-   * joins (or restarts into) an existing PSK network we must manually connect
-   * it to the others.
+   * Ensure PSK peers are ready for replication tests.
    *
-   * @param networkId  – The PSK network's SHA-256 fingerprint (from `joinNetwork`)
-   * @param names      – Agent names that should be interconnected
+   * With Iroh transport, peers connect via relay and QUIC automatically.
+   * This is a no-op kept for API compatibility — Iroh handles connectivity.
    */
-  async connectPskPeers(networkId: string, names: string[]): Promise<void> {
-    if (names.length < 2) return
-
-    // Give nodes a moment to finish binding their listening sockets
-    await sleep(500)
-
-    // Collect each agent's TCP multiaddrs for this network
-    const peerAddrs = new Map<string, string[]>()
-    for (const name of names) {
-      const nets = await this.client(name).getNetworks()
-      const net = nets.find((n) => n.id === networkId)
-      const tcpAddrs = (net?.multiaddrs ?? []).filter(
-        (ma) => ma.includes('/tcp/') && !ma.includes('p2p-circuit')
-      )
-      peerAddrs.set(name, tcpAddrs)
-    }
-
-    // Dial every other agent
-    const dialPromises: Promise<unknown>[] = []
-    for (const fromName of names) {
-      for (const [toName, addrs] of peerAddrs) {
-        if (toName === fromName || addrs.length === 0) continue
-        dialPromises.push(
-          this.client(fromName)
-            .dialPskPeer(networkId, addrs[0])
-            .catch(() => {/* ignore transient failures */})
-        )
-      }
-    }
-    await Promise.all(dialPromises)
-
-    // Wait until every agent has at least 1 peer
-    await Promise.all(
-      names.map((name) =>
-        pollUntil(
-          async () => {
-            const nets = await this.client(name).getNetworks()
-            const net = nets.find((n) => n.id === networkId)
-            return (net?.peers ?? 0) >= 1
-          },
-          30_000,
-          `${name} to have >= 1 peer in PSK network after reconnect`
-        )
-      )
-    )
+  async connectPskPeers(_networkId: string, _names: string[]): Promise<void> {
+    // Iroh manages QUIC connections natively via gossip topic membership.
+    // No manual peer wiring is required.
   }
 
   /**

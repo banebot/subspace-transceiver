@@ -4,7 +4,7 @@
  * agentId precedence:
  *   1. SUBSPACE_AGENT_ID environment variable
  *   2. Value in config.yaml
- *   3. null → daemon will use its libp2p peer ID as agentId
+ *   3. null → daemon will use the DID:Key derived from its identity as agentId
  *
  * The 'unknown' agentId is explicitly prohibited — every chunk must carry
  * a meaningful provenance identifier.

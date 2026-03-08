@@ -24,7 +24,7 @@
  *
  * WIRE FORMAT
  * ───────────
- * Bloom filters are serialized as base64 strings for GossipSub transport.
+ * Bloom filters are serialized as base64 strings for iroh-gossip transport.
  * A full filter is 256 bytes → 344 base64 chars — well within message limits.
  */
 

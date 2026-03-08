@@ -69,8 +69,8 @@ const { values: args } = parseArgs({
  * IP-based addresses are assumed reachable without a lookup.
  *
  * Format examples:
- *   /dnsaddr/bootstrap.libp2p.io/p2p/<PeerId>  → resolve bootstrap.libp2p.io
- *   /ip4/1.2.3.4/tcp/4001/p2p/<PeerId>         → always considered reachable
+ *   /dnsaddr/relay.example.com/p2p/<PeerId>  → resolve relay.example.com
+ *   /ip4/1.2.3.4/tcp/4001/p2p/<PeerId>      → always considered reachable
  */
 async function probeRelayDns(multiaddr: string): Promise<boolean> {
   const dnsaddrMatch = multiaddr.match(/^\/dnsaddr\/([^/]+)/)
@@ -94,10 +94,9 @@ async function probeRelayDns(multiaddr: string): Promise<boolean> {
 async function checkRelayHealth(relayAddresses: string[]): Promise<void> {
   if (relayAddresses.length === 0) {
     console.warn(
-      '[subspace] WARNING: No relay addresses configured. NAT traversal (circuit relay v2) ' +
-      'is disabled. Agents behind NAT will only be reachable via mDNS on the same LAN. ' +
-      'Add relay addresses to ~/.subspace/config.yaml under `relayAddresses:` to enable ' +
-      'global connectivity. See https://github.com/libp2p/js-libp2p/tree/main/packages/relay-server'
+      '[subspace] WARNING: No relay addresses configured. Iroh will use its default public ' +
+      'relay servers (n0.computer). Add custom relay addresses to ~/.subspace/config.yaml ' +
+      'under `relayAddresses:` to override.'
     )
     return
   }
@@ -179,7 +178,7 @@ async function main() {
   // ---------------------------------------------------------------------------
   // Load (or generate) the persistent agent identity
   // Stored in <dataDir>/identity.key so each daemon instance has a unique
-  // Ed25519 keypair and a distinct libp2p PeerId.
+  // Ed25519 keypair with a DID:Key identity and a libp2p PeerId for legacy support.
   // ---------------------------------------------------------------------------
   let identity: Awaited<ReturnType<typeof loadOrCreateIdentity>>
   try {
@@ -199,7 +198,7 @@ async function main() {
   // The global session connects the agent to the open Subspace internet before
   // any PSK networks are joined. It provides:
   //   - A globally routable identity via circuit relay (agent://<peerId>)
-  //   - Public discovery manifest broadcasting on the well-known GossipSub topic
+  //   - Public discovery manifest broadcasting via iroh-gossip
   //   - Browse protocol support for any peer on the internet
   //   - No PSK required — global presence is automatic
   //
@@ -476,11 +475,11 @@ async function main() {
   })
 
   process.on('unhandledRejection', (reason) => {
-    // Log but don't crash the daemon.  OrbitDB and libp2p create many
-    // fire-and-forget promises for P2P operations (GossipSub publish,
-    // DHT queries, connection upgrades) that can legitimately fail when
-    // peers disconnect or the mesh is unstable.  Crashing on every such
-    // failure makes the daemon extremely fragile in test environments.
+    // Log but don't crash the daemon. Iroh and async P2P operations create
+    // fire-and-forget promises (gossip publish, relay negotiation, QUIC
+    // connection attempts) that can legitimately fail when peers disconnect
+    // or the network is unstable.  Crashing on every such failure makes the
+    // daemon extremely fragile in test environments.
     // uncaughtException (synchronous throws) still triggers a clean shutdown.
     console.warn('[subspace] Unhandled rejection (non-fatal):', reason)
   })

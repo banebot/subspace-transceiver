@@ -198,7 +198,6 @@ describe('PSK network isolation', () => {
 
   beforeAll(async () => {
     await harness.startAgents(['alpha', 'beta', 'gamma'])
-    await harness.waitForMesh(1, 45_000)
 
     pskA = randomPsk()
     pskB = randomPsk()

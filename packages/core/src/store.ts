@@ -1,9 +1,9 @@
 /**
  * IMemoryStore — the core abstraction for Subspace Transceiver memory storage.
  *
- * All store operations go through this interface. The OrbitDB implementation
- * is hidden in orbitdb-store.ts. This separation guards against OrbitDB/Helia
- * API churn and allows alternative implementations (in-memory for tests, etc.).
+ * The concrete implementation is LoroMemoryStore (loro-store.ts), backed by
+ * the Loro CRDT library for conflict-free distributed state. Stores are
+ * replicated across peers via iroh-gossip delta sync (see replication.ts).
  *
  * Write semantics: APPEND-ONLY. Never put() over an existing id.
  * Updates must use a new id + set supersedes: previousId.
@@ -18,7 +18,6 @@ import type { MemoryChunk, MemoryQuery } from './schema.js'
  * Events emitted by IMemoryStore implementations.
  *
  * 'replicated' — fired when remote peer data merges into the local store
- *                (OrbitDB 'update' event from a remote peer)
  * 'error'      — fired on unrecoverable store errors
  */
 export interface MemoryStoreEvents {

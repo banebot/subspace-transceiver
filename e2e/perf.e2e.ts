@@ -152,7 +152,6 @@ describe('cross-peer network query latency', () => {
   const harness = new TestHarness()
   beforeAll(async () => {
     await harness.startAgents(['alpha', 'beta'])
-    await harness.waitForMesh(1, 45_000)
     await harness.joinAllToPsk()
 
     // Alpha has 50 chunks for Beta to query
@@ -188,17 +187,17 @@ describe('cross-peer network query latency', () => {
 
 // ── Test 4: mesh formation time ───────────────────────────────────────────────
 
-describe('mesh formation time', () => {
-  it('3 agents on same host form a mesh in < 45s (mDNS)', async () => {
+describe('engine startup time', () => {
+  it('3 agents start with Iroh engine in < 30s', async () => {
     const harness = new TestHarness()
     const start = Date.now()
 
     await harness.startAgents(['a', 'b', 'c'])
-    await harness.waitForMesh(1, 45_000)
+    await harness.waitForMesh(1, 30_000)
 
     const formationTimeMs = Date.now() - start
     recordResult({
-      test: 'mesh-formation-3-agents',
+      test: 'engine-startup-3-agents',
       p50: formationTimeMs,
       p95: formationTimeMs,
       unit: 'ms',
@@ -206,8 +205,8 @@ describe('mesh formation time', () => {
     })
 
     // eslint-disable-next-line no-console
-    console.log(`[perf] Mesh formation time (3 agents): ${formationTimeMs}ms`)
-    expect(formationTimeMs).toBeLessThan(45_000)
+    console.log(`[perf] Engine startup time (3 agents): ${formationTimeMs}ms`)
+    expect(formationTimeMs).toBeLessThan(30_000)
 
     await harness.teardown()
   })

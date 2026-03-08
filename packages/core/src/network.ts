@@ -30,7 +30,6 @@ import type { IMemoryStore } from './store.js'
 import { BacklinkIndex } from './backlink-index.js'
 import { NetworkError, ErrorCode } from './errors.js'
 import type { StampCache } from './pow.js'
-import { SubspaceConnectionPruner } from './connection-pruner.js'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
@@ -51,8 +50,8 @@ export interface NetworkSession {
   bridge: EngineBridge
   /** Gossip topic hex for this network's CRDT replication */
   gossipTopicHex: string
-  /** Connection pruner stub (no-op in Iroh; kept for API compatibility) */
-  pruner: SubspaceConnectionPruner | null
+  /** Connection pruning is handled natively by Iroh */
+  pruner: null
   /** Memory stores, keyed by namespace */
   stores: {
     skill: IMemoryStore
@@ -260,7 +259,7 @@ export async function joinNetwork(
 export async function leaveNetwork(session: NetworkSession): Promise<void> {
   const errors: unknown[] = []
 
-  session.pruner?.stop()
+  // Connection pruning handled natively by Iroh
   session.replication?.stop()
 
   await session.discovery.stop().catch((e: unknown) => errors.push(e))

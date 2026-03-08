@@ -9,7 +9,7 @@
  * ─────────
  * - Built on startup by scanning the local store.
  * - Updated incrementally when chunks are put (local or replicated).
- * - Not persisted — rebuilt from OrbitDB on restart (fast, local-only).
+ * - Not persisted — rebuilt from the Loro store on restart (fast, local-only).
  *
  * INDEX COVERAGE
  * ──────────────

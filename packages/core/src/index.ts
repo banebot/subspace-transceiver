@@ -169,9 +169,7 @@ export type { BootstrapPeer } from './bootstrap.js'
 export { createIrohNode, derivePeerId } from './node.js'
 export type { IrohNode, IrohNodeOptions } from './node.js'
 
-// Connection pruner — disconnects inbound non-Subspace peers after graceMs
-export { SubspaceConnectionPruner } from './connection-pruner.js'
-export type { ConnectionPrunerOptions } from './connection-pruner.js'
+// Connection pruning is handled natively by Iroh (QUIC connections close after protocol completes)
 
 // ANP-compatible meta-protocol capability negotiation
 export {

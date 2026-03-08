@@ -1,10 +1,10 @@
 /**
  * LoroEpochManager — epoch-based Loro snapshot rotation.
  *
- * Replaces the OrbitDB-based EpochManager with a much simpler implementation:
+ * Loro CRDT-based epoch manager:
  * - Each epoch is a separate LoroMemoryStore backed by a binary snapshot file.
  * - Epoch rotation migrates live chunks to a new store, then drops old snapshot files.
- * - No LevelDB, no Helia, no OrbitDB — just CRDT snapshots on disk.
+ * - No LevelDB, no IPFS — just Loro CRDT snapshots on disk.
  *
  * ## Design
  * Epoch IDs follow the same computeEpochId() scheme as EpochManager.
