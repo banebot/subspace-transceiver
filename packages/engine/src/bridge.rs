@@ -33,6 +33,7 @@ use tracing::{info, warn};
 /// State held after `engine.start` succeeds.
 struct EngineState {
     endpoint: Endpoint,
+    #[allow(dead_code)] // Held to keep Arc alive; used indirectly via GossipManager
     gossip: Arc<Gossip>,
     router: iroh::protocol::Router,
 }
@@ -170,12 +171,9 @@ impl Bridge {
 
         // Build and spawn the router for incoming connections
         let gossip_proto = gossip.clone();
-        let router = match iroh::protocol::Router::builder(endpoint.clone())
+        let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(GOSSIP_ALPN, gossip_proto)
-            .spawn()
-        {
-            router => router,
-        };
+            .spawn();
 
         let ep_id = endpoint.id().to_string();
         let addrs: Vec<String> = endpoint.addr().ip_addrs().map(|a| a.to_string()).collect();
@@ -269,9 +267,9 @@ impl Bridge {
                         let notification = RpcNotification::new(
                             methods::NOTIFY_GOSSIP_RECEIVED,
                             json!({
-                                "topicHex": msg.topic_hex,
-                                "payload": payload_b64,
-                                "fromNodeId": msg.from_node_id,
+                                "topic_hex": msg.topic_hex,
+                                "payload_b64": payload_b64,
+                                "from_node_id": msg.from_node_id,
                             }),
                         );
                         if notify_tx.send(notification).is_err() {

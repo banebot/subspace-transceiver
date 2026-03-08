@@ -12,7 +12,7 @@
  * - `node.getPeers()` → `node.getPeers()` (EndpointId strings)
  *
  * ## Key identity mapping
- * The 32-byte Ed25519 seed from `Buffer.from(identity.privateKey.raw).toString('hex')` maps directly to an
+ * The 32-byte Ed25519 seed from `Buffer.from(identity.privateKey.raw.slice(0, 32)).toString('hex')` maps directly to an
  * Iroh EndpointId (Ed25519 public key). This is the same seed used for
  * DID:Key derivation — all three identifiers are cryptographically linked:
  *   - Iroh EndpointId = Ed25519 pubkey
@@ -78,7 +78,7 @@ export async function createIrohNode(
   await bridge.start()
 
   const result = await bridge.engineStart({
-    seedHex: Buffer.from(identity.privateKey.raw).toString('hex'),
+    seedHex: Buffer.from(identity.privateKey.raw.slice(0, 32)).toString('hex'),
     relayUrl: options.relayUrl,
   })
 

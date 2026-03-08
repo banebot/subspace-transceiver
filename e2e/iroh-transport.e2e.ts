@@ -64,12 +64,13 @@ describe('ANP capability negotiation endpoint', () => {
     await harness.startAgents(['alpha'])
     const resp = await fetch(`${harness.url('alpha')}/capabilities`)
     expect(resp.ok).toBe(true)
-    const data = await resp.json() as { capabilities: string[] }
+    const data = await resp.json() as { capabilities: Array<{ nsid: string; version: string }> }
     expect(Array.isArray(data.capabilities)).toBe(true)
     // Built-in capabilities registered in negotiate.ts
-    expect(data.capabilities).toContain('memory.read')
-    expect(data.capabilities).toContain('memory.write')
-    expect(data.capabilities).toContain('negotiate.query')
+    const nsids = data.capabilities.map(c => c.nsid)
+    expect(nsids).toContain('net.subspace.memory.skill')
+    expect(nsids).toContain('net.subspace.memory.project')
+    expect(nsids).toContain('net.subspace.protocol.negotiate')
   })
 
   it('GET /capabilities/anp returns ANP-format negotiate schema', async () => {
@@ -84,10 +85,10 @@ describe('ANP capability negotiation endpoint', () => {
     expect(data.protocolVersion).toBe('anp/0.1')
     expect(typeof data.agentId).toBe('string')
     expect(Array.isArray(data.capabilities)).toBe(true)
-    // Verify memory.read is in ANP format
-    const memRead = data.capabilities.find(c => c.id === 'memory.read')
-    expect(memRead).toBeDefined()
-    expect(memRead!.version).toBeTruthy()
+    // Verify memory.skill is in ANP format
+    const memSkill = data.capabilities.find(c => c.id === 'net.subspace.memory.skill')
+    expect(memSkill).toBeDefined()
+    expect(memSkill!.version).toBeTruthy()
   })
 })
 
@@ -165,10 +166,12 @@ describe('daemon reflects Iroh engine integration', () => {
 
     const chunkA = await harness.client('alpha').putMemory({
       content: 'Written by alpha via Iroh',
+      topic: ['iroh-test'],
       collection: 'iroh-test',
     })
     const chunkB = await harness.client('beta').putMemory({
       content: 'Written by beta via Iroh',
+      topic: ['iroh-test'],
       collection: 'iroh-test',
     })
 

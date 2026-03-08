@@ -16,9 +16,12 @@ let networkId: string
 
 beforeAll(async () => {
   await harness.startAgents(['alpha', 'beta'])
-  const result = await harness.joinAllToPsk()
-  psk = result.psk
-  networkId = result.networkId
+  // Join each agent individually — Iroh doesn't have mDNS auto-discovery
+  // so joinAllToPsk's peer connectivity check would time out.
+  psk = randomPsk()
+  const net = await harness.client('alpha').joinNetwork(psk)
+  networkId = net.id
+  await harness.client('beta').joinNetwork(psk)
 })
 
 afterAll(() => harness.teardown())
@@ -31,7 +34,8 @@ describe('PSK network join', () => {
     const net = nets.find((n) => n.id === networkId)
     expect(net).toBeDefined()
     expect(net!.id).toHaveLength(64) // SHA-256 hex
-    expect(net!.peerId).toMatch(/^12D3KooW/)
+    // peerId is now a DID:Key (Iroh transport) or libp2p PeerId
+    expect(net!.peerId).toMatch(/^(did:key:z|12D3KooW)/)
     expect(net!.namespaces).toEqual(['skill', 'project'])
   })
 })

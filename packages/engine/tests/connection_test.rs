@@ -11,7 +11,6 @@
 use iroh::{Endpoint, SecretKey};
 use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
 use std::sync::Arc;
-use tokio::time::{timeout, Duration};
 
 // Deterministic test seeds (never use in production)
 const SEED_A: [u8; 32] = [0xAA; 32];
@@ -97,11 +96,11 @@ async fn test_endpoint_has_local_addr() {
 
 #[tokio::test]
 async fn test_gossip_initializes_with_endpoint() {
-    let (ep, gossip, router) = make_endpoint_with_gossip(SEED_A).await;
+    let (ep, _gossip, router) = make_endpoint_with_gossip(SEED_A).await;
 
     // Gossip should be ready without errors
     // We verify it initializes by checking the endpoint is alive
-    assert_eq!(ep.id().to_string().len() > 0, true);
+    assert!(!ep.id().to_string().is_empty());
 
     let _ = router.shutdown().await;
     ep.close().await;
@@ -111,7 +110,6 @@ async fn test_gossip_initializes_with_endpoint() {
 async fn test_engine_state_lifecycle() {
     // Simulate the bridge engine.start / engine.stop cycle
     use subspace_engine::endpoint::IrohEndpoint;
-    use subspace_engine::gossip::GossipManager;
 
     let ep = IrohEndpoint::new();
     assert!(!ep.is_started().await);

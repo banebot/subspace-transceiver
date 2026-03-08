@@ -268,7 +268,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // GET /health
   // ---------------------------------------------------------------------------
   app.get('/health', async (_req, reply) => {
-    const networks = [...state.sessions.values()].map(sessionToDTO)
+    const networks = await Promise.all([...state.sessions.values()].map(sessionToDTO))
     const globalPeers = state.globalSession?.node.getPeers().length ?? 0
     // Prefer announced multiaddrs; fall back to constructing loopback addr from listen port.
     const rawGlobalMultiaddrs = (state.globalSession?.node.getMultiaddrs() ?? [])
@@ -424,7 +424,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
   // GET /networks
   // ---------------------------------------------------------------------------
   app.get('/networks', async (_req, reply) => {
-    return reply.send([...state.sessions.values()].map(sessionToDTO))
+    return reply.send(await Promise.all([...state.sessions.values()].map(sessionToDTO)))
   })
 
   // ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
 
     const networkId = deriveNetworkId(body.psk)
     if (state.sessions.has(networkId)) {
-      return reply.status(200).send(sessionToDTO(state.sessions.get(networkId)!))
+      return reply.status(200).send(await sessionToDTO(state.sessions.get(networkId)!))
     }
 
     try {
@@ -474,7 +474,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       }
       // Register query protocol for new session
       registerQueryProtocol(session, state)
-      return reply.status(201).send(sessionToDTO(session))
+      return reply.status(201).send(await sessionToDTO(session))
     } catch (err) {
       const code = err instanceof AgentNetError ? err.code : ErrorCode.JOIN_FAILED
       return reply.status(500).send({ error: String(err), code })

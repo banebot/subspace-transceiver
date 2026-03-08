@@ -155,7 +155,7 @@ export async function joinNetwork(
   // Ensure the bridge/engine is running
   if (!bridge.isRunning) {
     await bridge.start()
-    await bridge.engineStart({ seedHex: Buffer.from(identity.privateKey.raw).toString('hex') })
+    await bridge.engineStart({ seedHex: Buffer.from(identity.privateKey.raw.slice(0, 32)).toString('hex') })
   }
 
   try {
@@ -348,7 +348,7 @@ export async function joinGlobalNetwork(
 
   if (!bridge.isRunning) {
     await bridge.start()
-    await bridge.engineStart({ seedHex: Buffer.from(identity.privateKey.raw).toString('hex') })
+    await bridge.engineStart({ seedHex: Buffer.from(identity.privateKey.raw.slice(0, 32)).toString('hex') })
   }
 
   const localPeerId = identity.did ?? identity.peerId

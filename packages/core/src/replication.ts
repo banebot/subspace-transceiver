@@ -19,6 +19,8 @@ import type { EngineBridge, GossipMessage } from './engine-bridge.js'
 interface DeltaSyncCapable {
   exportDelta(since?: Uint8Array): Uint8Array
   importDelta(bytes: Uint8Array): void
+  /** Return a lightweight snapshot for use as a version marker with exportDelta(since) */
+  getVersionSnapshot(): Uint8Array
   on(event: 'changed', listener: () => void): unknown
   removeListener(event: 'changed', listener: () => void): unknown
 }
@@ -115,8 +117,8 @@ export class ReplicationManager {
       const store = this.stores[namespace]
       const delta = store.exportDelta(this.lastSyncVersion[namespace])
 
-      // Update our sync version to current state
-      this.lastSyncVersion[namespace] = store.exportDelta(undefined) // snapshot as version marker
+      // Update our sync version to current state (lightweight snapshot)
+      this.lastSyncVersion[namespace] = store.getVersionSnapshot()
 
       const envelope: DeltaEnvelope = {
         type: ENVELOPE_TYPE,

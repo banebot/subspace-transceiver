@@ -177,6 +177,10 @@ export class LoroEpochManager extends EventEmitter implements IMemoryStore {
     return this.currentStore().exportDelta(since)
   }
 
+  getVersionSnapshot(): Uint8Array {
+    return this.currentStore().getVersionSnapshot()
+  }
+
   importDelta(bytes: Uint8Array): void {
     this.currentStore().importDelta(bytes)
   }

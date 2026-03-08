@@ -247,6 +247,15 @@ export class LoroMemoryStore extends EventEmitter implements IMemoryStore {
   }
 
   /**
+   * Return a lightweight snapshot for use as a version marker.
+   * This is used by ReplicationManager to track what's been broadcast.
+   * Returns a full snapshot (needed by exportDelta(since) to reconstruct version vector).
+   */
+  getVersionSnapshot(): Uint8Array {
+    return this.doc.export({ mode: 'snapshot' })
+  }
+
+  /**
    * Import a binary delta from a remote peer.
    * Emits 'replicated' after applying the delta.
    *

@@ -310,6 +310,7 @@ export function toANPCapability(cap: CapabilityDeclaration): Record<string, unkn
 export function toANPAdvertisement(response: NegotiateResponse): Record<string, unknown> {
   return {
     type: 'capability_advertisement',
+    protocolVersion: 'anp/0.1',
     agentId: response.agentDID,
     peerId: response.peerId,
     capabilities: response.capabilities.map(toANPCapability),
