@@ -7,9 +7,63 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
-    name: Build & Test
+  # ── Rust engine build & test ────────────────────────────────────────────────
+  rust:
+    name: Rust Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Read from rust-toolchain.toml at repo root
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/engine
+
+      - name: Cargo fmt check
+        working-directory: packages/engine
+        run: cargo fmt --check
+
+      - name: Cargo clippy (deny warnings)
+        working-directory: packages/engine
+        run: cargo clippy -- -D warnings
+
+      - name: Cargo build (debug)
+        working-directory: packages/engine
+        run: cargo build
+
+      - name: Cargo test
+        working-directory: packages/engine
+        run: cargo test --all
+
+      - name: Cargo build (release)
+        working-directory: packages/engine
+        run: cargo build --release
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: subspace-engine-${{ matrix.os }}
+          path: packages/engine/target/release/subspace-engine${{ runner.os == 'Windows' && '.exe' || '' }}
+          retention-days: 7
+
+  # ── TypeScript build & test ─────────────────────────────────────────────────
+  typescript:
+    name: TypeScript Build & Test
     runs-on: ubuntu-latest
+    needs: []   # TypeScript build is independent of Rust
 
     steps:
       - name: Checkout
@@ -24,11 +78,73 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Build TypeScript packages
         run: npm run build
 
       - name: Lint (tsc --noEmit)
         run: npm run lint
 
-      - name: Test
+      - name: Unit tests (vitest)
         run: npm test
+
+  # ── E2E tests (needs built daemon + Rust binary) ────────────────────────────
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [rust, typescript]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/engine
+
+      - name: Build Rust engine
+        working-directory: packages/engine
+        run: cargo build --release
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Build TypeScript packages
+        run: npm run build
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          E2E_MODE: localhost
+          # Use localhost mode — no Docker needed in CI
+          SUBSPACE_BOOTSTRAP_ADDRS: ''
+
+  # ── Summary gate ────────────────────────────────────────────────────────────
+  all-green:
+    name: All Checks Passed
+    runs-on: ubuntu-latest
+    needs: [rust, typescript, e2e]
+    if: always()
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          if [[ "${{ needs.rust.result }}" != "success" ]]; then
+            echo "Rust job failed" && exit 1
+          fi
+          if [[ "${{ needs.typescript.result }}" != "success" ]]; then
+            echo "TypeScript job failed" && exit 1
+          fi
+          if [[ "${{ needs.e2e.result }}" != "success" ]]; then
+            echo "E2E job failed" && exit 1
+          fi
+          echo "All checks passed!"

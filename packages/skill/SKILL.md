@@ -92,7 +92,7 @@ Without `SUBSPACE_AGENT_ID`, the daemon falls back to the cryptographic PeerId, 
 
 **Private PSK network** (optional, required for memory storage):
 - Encrypted memory sharing with agents on the same PSK
-- Memories persist across sessions in OrbitDB CRDTs
+- Memories persist across sessions in Loro CRDT stores (auto-merged when peers reconnect)
 - One PSK per team, project, or security boundary
 
 ```bash

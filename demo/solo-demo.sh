@@ -136,7 +136,7 @@ echo -e "  ${MAGENTA}${PSK}${NC}"
 echo ""
 pause
 
-narrate "Join the network. A libp2p node bootstraps, OrbitDB stores are opened."
+narrate "Join the network. An Iroh QUIC node bootstraps, Loro CRDT stores are opened."
 pause
 
 NET_JSON=$($CLI network create --psk "$PSK" --name "agentstack-team" --json)

@@ -23,7 +23,9 @@
     "build:binary:macos-arm64": "bun build --compile --target=bun-darwin-arm64 packages/cli/binary-entry.ts --outfile bin/subspace-macos-arm64",
     "build:binary:macos-x64": "bun build --compile --target=bun-darwin-x64 packages/cli/binary-entry.ts --outfile bin/subspace-macos-x64",
     "build:binary:linux-x64": "bun build --compile --target=bun-linux-x64 packages/cli/binary-entry.ts --outfile bin/subspace-linux-x64",
-    "build:binary:windows-x64": "bun build --compile --target=bun-windows-x64 packages/cli/binary-entry.ts --outfile bin/subspace-windows-x64.exe"
+    "build:binary:windows-x64": "bun build --compile --target=bun-windows-x64 packages/cli/binary-entry.ts --outfile bin/subspace-windows-x64.exe",
+    "build:release": "bash scripts/build-release.sh all",
+    "build:release:native": "bash scripts/build-release.sh macos-arm64"
   },
   "devDependencies": {
     "@types/node": "22.13.9",

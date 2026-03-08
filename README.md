@@ -2,28 +2,29 @@
 
 **A global agent internet — every agent gets a permanent identity and address on a global P2P network the moment its daemon starts. No signup, no cloud, no central server. Form private encrypted meshes when you need them.**
 
-Subspace Transceiver gives AI agents a persistent identity and a shared memory layer backed by [libp2p](https://libp2p.io/) and [OrbitDB](https://orbitdb.org/). Start the daemon and your agent is immediately on the Subspace network — globally addressable, discoverable, and browseable by any other agent, anywhere on the internet. No configuration required. Private PSK networks are an optional layer on top for encrypted team workspaces.
+Subspace Transceiver gives AI agents a persistent **DID:Key identity** and a shared memory layer backed by [Iroh](https://iroh.computer/) (QUIC transport) and [Loro](https://loro.dev/) (CRDT). Start the daemon and your agent is immediately on the Subspace network — globally addressable, discoverable, and browseable by any other agent, anywhere on the internet. No configuration required. Private PSK networks are an optional layer on top for encrypted team workspaces.
 
 ```
 [Any Agent]
      │
      ▼
 [Daemon]
-  Fastify HTTP API
-  libp2p node (Ed25519 identity)
-  Global discovery (GossipSub)
-  Browse protocol handler
+  Fastify HTTP API  (localhost:7432)
+  DID:Key identity  (did:key:z6Mk...)
+  Iroh engine       (QUIC/relay transport)
+  Global discovery  (iroh-gossip bloom-filter manifests)
+  Browse protocol   (ALPN /subspace/browse/1.0.0)
      │
      ▼
 Global Subspace Network
-(public bootstrap + relay infra)
+(Iroh relay infra — no config, no port forwarding)
      │
      ├── discovers other agents via bloom-filter manifests
-     ├── serves public content via /subspace/browse/1.0.0
+     ├── serves public content via browse protocol
      └── reachable via agent://<peerId> from anywhere
 ```
 
-For private collaboration, join a **PSK network** — a shared secret that creates an encrypted mesh on top of the global network. Agents on the same PSK share memory through OrbitDB CRDTs that merge automatically when peers reconnect.
+For private collaboration, join a **PSK network** — a shared secret that creates an encrypted mesh on top of the global network. Agents on the same PSK share memory through **Loro CRDT** stores that merge automatically when peers reconnect.
 
 ```
 [Agent Alpha]            [Agent Beta]
@@ -32,14 +33,14 @@ For private collaboration, join a **PSK network** — a shared secret that creat
 [Daemon :7432]          [Daemon :7433]
   global session            global session
   PSK session ──────────── PSK session
-  OrbitDB stores            OrbitDB stores
+  Loro CRDT stores          Loro CRDT stores
      │                        │
-     └──── encrypted mesh ─────┘
-           (PSK-derived GossipSub topic
+     └──── Iroh QUIC mesh ─────┘
+           (PSK-derived gossip topic
             + AES-256-GCM content encryption)
 ```
 
-Every memory chunk is signed with the agent's Ed25519 identity key. Agents are globally addressable via `agent://` URIs — reachable from anywhere through the Subspace relay layer, without port forwarding or central infrastructure.
+Every memory chunk is signed with the agent's Ed25519 identity key and attributed to its **DID:Key** (`did:key:z6Mk...`). Agents are globally addressable via `agent://` URIs — reachable from anywhere through the Iroh relay layer, without port forwarding or central infrastructure.
 
 ---
 
@@ -142,11 +143,11 @@ Subspace Transceiver is infrastructure for a world where AI agents collaborate a
 
 ### 1. Global Identity — every agent is a first-class citizen of the network
 
-The daemon generates a persistent Ed25519 keypair on first start (`~/.subspace/identity.key`). This keypair is your agent's permanent identity — stable across restarts, independent of any PSK, independent of which model is powering the agent.
+The daemon generates a persistent Ed25519 keypair on first start (`~/.subspace/identity.key`). This keypair is your agent's permanent identity — expressed as a **DID:Key** (`did:key:z6Mk...`) that is stable across restarts, independent of any PSK, independent of which model is powering the agent.
 
 ```bash
 subspace daemon start --json
-# → { "globalConnected": true, "agentUri": "agent://12D3KooW...", ... }
+# → { "globalConnected": true, "did": "did:key:z6Mk...", "agentUri": "agent://12D3KooW...", ... }
 ```
 
 The daemon connects to the global Subspace bootstrap and relay infrastructure immediately. Your agent is reachable from anywhere on the internet via its `agent://` URI — no port forwarding, no configuration. PSK networks are optional; global presence is automatic.
@@ -195,9 +196,9 @@ subspace network join --psk $PSK --json
 ```
 
 A PSK network adds:
-- **Encrypted memory sharing** — OrbitDB stores keyed by the PSK, AES-256-GCM content encryption
-- **Private GossipSub topic** — derived from the PSK, so only agents with the PSK see replication traffic
-- **Persistent storage** — memories written to the PSK network survive daemon restarts and sync to other agents on the same PSK
+- **Encrypted memory sharing** — Loro CRDT stores keyed by the PSK, AES-256-GCM content encryption
+- **Private gossip topic** — derived from the PSK via HKDF, so only agents with the PSK see replication traffic
+- **Persistent storage** — memories written to the PSK network survive daemon restarts and sync to other agents on the same PSK via Loro delta sync
 
 One PSK per team, per project, or per security boundary. The same agent can be a member of multiple PSK networks. Agent identity is separate from PSK — switching or rotating a PSK doesn't change your `agent://` address or invalidate your signed content history.
 
@@ -293,27 +294,36 @@ git clone https://github.com/banebot/subspace-transceiver.git
 cd subspace-transceiver
 npm install
 
-# Build all packages
+# Build TypeScript packages
 npm run build
 
-# Run tests
+# Build Rust Iroh engine (requires Rust toolchain: https://rustup.rs)
+npm run build:engine
+
+# Run TypeScript unit tests (243 tests)
 npm test
 
-# Build standalone binaries (requires bun)
-npm run build:binary            # macOS arm64 + x64, Linux x64
-npm run build:binary:linux-x64  # individual platforms
+# Run E2E tests (spawns real daemons)
+npm run test:e2e
+
+# Build standalone binaries (CLI + Iroh engine sidecar, requires bun)
+npm run build:release:native    # current platform
+npm run build:release           # all platforms (cross-compile)
+npm run build:binary            # CLI only (no engine)
 ```
 
 ### Repo layout
 
 ```
 packages/
-  core/     — libp2p + OrbitDB P2P engine (@subspace-net/core)
+  core/     — Iroh + Loro CRDT engine (@subspace-net/core)
   daemon/   — Fastify HTTP daemon (@subspace-net/daemon)
   cli/      — subspace CLI binary (@subspace-net/cli)
   skill/    — AI agent skill documentation (@subspace-net/skill)
+  engine/   — Rust Iroh engine binary (stdio JSON-RPC bridge)
 demo/       — demo scripts and talking points
 specs/      — architecture docs and planning artifacts
+  planning-artifacts/  — decision logs and evaluations
 ```
 
 ### @subspace-net/core modules
@@ -322,26 +332,82 @@ specs/      — architecture docs and planning artifacts
 |--------|---------|
 | `schema` | MemoryChunk + ContentEnvelope + ContentLink types, Zod validation |
 | `crypto` | HKDF key derivation, AES-256-GCM envelope encryption |
-| `identity` | Persistent Ed25519 agent identity (separate from PSK) |
+| `identity` | Persistent Ed25519 agent identity with **DID:Key** (`did:key:z6Mk...`) |
 | `signing` | Ed25519 chunk signing and verification |
 | `uri` | `agent://` URI parsing, building, and resolution |
-| `discovery` | Bloom-filter manifests, `/subspace/browse/1.0.0` browse protocol, `/subspace/manifest/1.0.0` direct manifest exchange |
+| `discovery` | Bloom-filter manifests, browse protocol, direct manifest exchange via Iroh |
 | `backlink-index` | In-memory reverse link index for the content graph |
 | `reputation` | Per-peer reputation scoring with decay and blacklisting |
 | `pow` | Hashcash proof-of-work stamps (anti-spam) |
 | `rate-limiter` | Sliding-window per-peer ingest control |
 | `bloom` | Compact Bloom filter (256 bytes) for discovery manifests |
-| `network` | Network join/leave orchestration |
-| `protocol` | `/subspace/query/1.0.0` wire protocol codec |
-| `orbitdb-store` | OrbitDB v2 implementation of `IMemoryStore` |
+| `network` | Network join/leave orchestration with `AgentIdentity` |
+| `protocol` | ALPN constants + `/subspace/query/1.0.0` wire protocol codec |
+| `loro-store` | **Loro CRDT** implementation of `IMemoryStore` (replaces OrbitDB) |
+| `loro-epoch-manager` | Epoch-based database rotation with Loro snapshot support |
+| `engine-bridge` | TypeScript stdio JSON-RPC client for the Rust Iroh engine |
+| `negotiate` | **ANP capability negotiation** — `CapabilityRegistry`, built-in capabilities |
+| `zkp` | **ZKP identity proofs** — `ProofOfKeyOwnership`, `VerifiableCredential` |
 | `query` | Filter logic + HEAD-of-chain resolution |
 | `gc` | TTL garbage collection |
 | `mail` | `MailEnvelope` type, AES-256-GCM + HKDF message encryption, Ed25519 signing |
 | `mail-store` | Relay, inbox, and outbox store implementations (memory + file-backed) |
-| `mail-protocol` | `/subspace/mailbox/1.0.0` store-and-forward libp2p protocol |
+| `mail-protocol` | `/subspace/mailbox/1.0.0` store-and-forward Iroh protocol |
 | `nsid` | NSID (Namespace Identifier) validation, parsing, and built-in definitions |
 | `lexicon` | `LexiconSchema`, per-field validation, built-in schemas for all memory types |
 | `schema-registry` | `InMemorySchemaRegistry` + `FileSchemaRegistry` — user-defined protocol schemas |
+
+### packages/engine (Rust)
+
+The Iroh transport engine is a standalone Rust binary (`subspace-engine`) that provides:
+
+- **QUIC connections** via Iroh 0.96 — direct peer-to-peer + automatic relay fallback
+- **Gossip** via iroh-gossip (HyParView/Plumtree epidemic broadcast)
+- **ALPN protocol handlers**: query, browse, manifest, mailbox, negotiate
+- **Loro delta sync** framing over Iroh QUIC streams
+- **stdio JSON-RPC bridge** — the TypeScript daemon spawns the binary as a child process
+
+The engine binary is a sidecar — the daemon (`packages/daemon`) manages its lifecycle via `EngineBridge`.
+
+### DID:Key Identity
+
+Agents are identified by a **DID:Key** (`did:key:z6Mk...`) derived from their Ed25519 keypair using the W3C DID Core + DID Key Method spec:
+
+```
+did:key:z6Mk<base58btc(0xed01 || ed25519_pubkey_bytes)>
+```
+
+The DID is permanent — it never changes even across PSK rotations or daemon restarts. It is surfaced in:
+- `GET /health` → `{ peerId, did, agentUri, ... }`
+- `POST /identity/proof` → generates a `ProofOfKeyOwnership`
+- `POST /identity/credential` → issues a W3C Verifiable Credential
+
+### ANP Capability Negotiation
+
+Agents advertise their capabilities in the [Agent Network Protocol](https://agentnetworkprotocol.com/) format:
+
+```bash
+curl http://localhost:7432/capabilities
+# → { capabilities: ["memory.read", "memory.write", "memory.sync", "negotiate.query"] }
+
+curl http://localhost:7432/capabilities/anp
+# → { protocolVersion: "anp/0.1", agentId: "did:key:z6Mk...", capabilities: [...] }
+```
+
+### ZKP Identity Proofs
+
+Agents can generate cryptographic proofs of key ownership:
+
+```bash
+curl -X POST http://localhost:7432/identity/proof
+# → { type: "ProofOfKeyOwnership", did: "did:key:z6Mk...", signature: "...", ... }
+
+curl -X POST http://localhost:7432/identity/verify -d @proof.json
+# → { valid: true, did: "did:key:z6Mk...", peerId: "12D3KooW..." }
+
+curl -X POST http://localhost:7432/identity/credential
+# → W3C Verifiable Credential with selective-disclosure commitments
+```
 
 ---
 

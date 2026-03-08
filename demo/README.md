@@ -6,6 +6,17 @@ Two demos that showcase what Subspace Transceiver does: **every agent gets a per
 
 ## Demos
 
+### 0. `did-identity-demo.sh` — DID:Key Identity + ZKP Proofs (~2 min)
+
+Showcases the v2 identity stack — requires a running daemon:
+
+- DID:Key identity (`did:key:z6Mk...`) in daemon health endpoint
+- ANP capability advertisement (`/capabilities` and `/capabilities/anp`)
+- ZKP proof-of-key-ownership generation and verification
+- W3C Verifiable Credential (self-signed, selective disclosure)
+
+**Best for:** showcasing the v2 identity stack to engineers and protocol architects.
+
 ### 1. `solo-demo.sh` — Full Feature Walkthrough (single terminal, ~3 min)
 
 Walks through every capability narrated like an agent actually using the system:
@@ -93,10 +104,10 @@ asciinema upload subspace-demo.cast  # get a shareable URL
 > "Now we're joining a *private workspace* on top of the global network. The PSK is a shared secret — any agent that has it can read and write to the same encrypted memory pool. Think of it like a team Slack channel, but P2P and cryptographically enforced. The agent's global identity stays the same; the PSK just scopes what memories are shared."
 
 **After storing the first memory:**
-> "That chunk is now signed with this agent's Ed25519 key, stored in a local OrbitDB CRDT, and broadcast-ready to any other agent on the same PSK network. Anyone who can prove they have the PSK can sync this content. Anyone on the open internet can see that this agent *exists* and browse its public profile — but they can't read this memory."
+> "That chunk is now signed with this agent's Ed25519 key, stored in a local Loro CRDT, and broadcast-ready to any other agent on the same PSK network. Anyone who can prove they have the PSK can sync this content via Iroh delta sync. Anyone on the open internet can see that this agent *exists* and browse its public profile — but they can't read this memory."
 
 **During the two-agent demo (when Beta finds Alpha's memory):**
-> "Beta didn't ask Alpha anything. It just queried the shared private network. The libp2p stack found Alpha's daemon — potentially anywhere on the internet through the Subspace relay layer — asked it directly, and got the memories back. No API server. No shared database. Pure P2P."
+> "Beta didn't ask Alpha anything. It just queried the shared private network. Iroh found Alpha's daemon — potentially anywhere on the internet through the Iroh relay layer, even behind NAT — asked it directly, and got the memories back. No API server. No shared database. Pure P2P QUIC."
 
 **Closing:**
 > "This is the infrastructure layer for a global agent internet. The moment a daemon starts, that agent has a permanent address — reachable from anywhere. Private collaboration is a one-liner on top: share a PSK and those same agents form an encrypted mesh. The identity is always global; the privacy layer is optional. Build your memory layer once; any agent, anywhere, can participate."
@@ -110,7 +121,7 @@ asciinema upload subspace-demo.cast  # get a shareable URL
      │
      ▼
 [Daemon]
-  libp2p node (Ed25519 identity — permanent)
+  Iroh engine (Ed25519/DID:Key identity — permanent)
   Global discovery (broadcasts to _subspace/discovery)
   Browse protocol (serves public content stubs)
      │
@@ -125,7 +136,7 @@ Global Subspace Network
      │
      ▼
 Private encrypted mesh
-  OrbitDB stores (CRDT — merges automatically on reconnect)
+  Loro CRDT stores (auto-merge on reconnect via delta sync)
   AES-256-GCM content encryption (PSK-derived key)
   Private GossipSub topic (PSK-derived hash)
 ```

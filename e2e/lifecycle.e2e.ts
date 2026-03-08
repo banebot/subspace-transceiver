@@ -23,9 +23,11 @@ describe('daemon starts and becomes healthy', () => {
     const health = await harness.client('alpha').getHealth()
 
     expect(health.status).toBe('ok')
-    // libp2p Ed25519 PeerIds start with 12D3KooW
+    // Ed25519 PeerIds encoded in libp2p multihash format start with 12D3KooW
     expect(health.peerId).toMatch(/^12D3KooW/)
     expect(health.agentUri).toBe(`agent://${health.peerId}`)
+    // DID:Key identity (Phase 2.1+)
+    expect(health.did).toMatch(/^did:key:z/)
     expect(health.version).toBeTruthy()
     expect(typeof health.uptime).toBe('number')
   })

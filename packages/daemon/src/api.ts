@@ -71,6 +71,13 @@ import {
   type CapabilityDeclaration,
   type CapabilityRegistry,
   toANPAdvertisement,
+  // ZKP identity proofs (Phase 4.1)
+  generateOwnershipProof,
+  verifyOwnershipProof,
+  issueCapabilityCredential,
+  verifyCredential,
+  type ProofOfKeyOwnership,
+  type VerifiableCredential,
 } from '@subspace-net/core'
 
 const VERSION = '0.2.0'
@@ -319,6 +326,98 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       timestamp: Date.now(),
     })
     return reply.send(anpAdvert)
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /identity/proof — generate a ProofOfKeyOwnership for this agent
+  // ---------------------------------------------------------------------------
+  app.post('/identity/proof', async (req, reply) => {
+    const identity = state.agentIdentity
+    const body = (req.body ?? {}) as {
+      ttlMs?: number
+      context?: Record<string, string>
+    }
+
+    try {
+      const proof = await generateOwnershipProof(identity.did, identity.privateKey, {
+        ttlMs: body.ttlMs,
+        peerId: identity.peerId,
+        context: body.context,
+      })
+      return reply.send(proof)
+    } catch (err) {
+      return reply.status(500).send({
+        error: (err as Error).message,
+        code: 'PROOF_GENERATION_FAILED',
+      })
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /identity/verify — verify a ProofOfKeyOwnership
+  // ---------------------------------------------------------------------------
+  app.post('/identity/verify', async (req, reply) => {
+    const proof = req.body as ProofOfKeyOwnership
+    if (!proof || proof.type !== 'ProofOfKeyOwnership') {
+      return reply.status(400).send({
+        error: 'Body must be a ProofOfKeyOwnership object',
+        code: 'INVALID_PROOF',
+      })
+    }
+
+    try {
+      const valid = await verifyOwnershipProof(proof)
+      return reply.send({ valid, did: proof.did, peerId: proof.peerId ?? null })
+    } catch (err) {
+      return reply.send({ valid: false, error: (err as Error).message })
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /identity/credential — issue a self-signed capability VC
+  // ---------------------------------------------------------------------------
+  app.post('/identity/credential', async (req, reply) => {
+    const identity = state.agentIdentity
+    const body = (req.body ?? {}) as { capabilities?: string[] }
+    const caps: string[] = body.capabilities ?? (state.capabilityRegistry?.list() ?? []).map(c => c.nsid)
+
+    try {
+      const { credential } = await issueCapabilityCredential(
+        identity.did,
+        identity.privateKey,
+        caps
+      )
+      return reply.send(credential)
+    } catch (err) {
+      return reply.status(500).send({
+        error: (err as Error).message,
+        code: 'CREDENTIAL_ISSUANCE_FAILED',
+      })
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // POST /identity/credential/verify — verify a VerifiableCredential
+  // ---------------------------------------------------------------------------
+  app.post('/identity/credential/verify', async (req, reply) => {
+    const credential = req.body as VerifiableCredential
+    if (!credential || !credential.proof) {
+      return reply.status(400).send({
+        error: 'Body must be a VerifiableCredential object',
+        code: 'INVALID_CREDENTIAL',
+      })
+    }
+
+    try {
+      const valid = await verifyCredential(credential)
+      return reply.send({
+        valid,
+        issuer: credential.issuer,
+        subject: credential.credentialSubject.id,
+      })
+    } catch (err) {
+      return reply.send({ valid: false, error: (err as Error).message })
+    }
   })
 
   // ---------------------------------------------------------------------------

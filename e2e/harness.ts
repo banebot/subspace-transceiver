@@ -191,6 +191,13 @@ export class TestHarness {
     }
   }
 
+  /** Get the base URL for a named agent. */
+  url(name: string): string {
+    const agent = this.agents.get(name)
+    if (!agent) throw new Error(`Agent ${name} not started`)
+    return agent.url
+  }
+
   /** Get a typed client for a named agent. */
   client(name: string): DaemonClient {
     const agent = this.agents.get(name)
@@ -232,14 +239,14 @@ export class TestHarness {
     )
 
     // Explicitly connect global nodes to each other via direct TCP dial.
-    // libp2p v3 does not auto-dial mDNS-discovered peers, and the relay-only
+    // Iroh peers are connected via explicit dial for deterministic test setup, and the relay-only
     // connection doesn't give us direct peer-to-peer connectivity needed by
     // the browse protocol (browse requires direct connection to the target peer).
     await this.connectGlobalPeers()
   }
 
   /**
-   * Explicitly connect all agents' global libp2p nodes to each other.
+   * Explicitly connect all agents' global Iroh nodes to each other.
    * Fetches each agent's global TCP multiaddrs and has every other agent
    * dial them directly, ensuring that browse and other direct-dial protocols work.
    */

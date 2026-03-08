@@ -287,3 +287,21 @@ export type {
   PowScope,
   StampCacheEntry,
 } from './pow.js'
+
+// ZKP identity proofs (Phase 4.1)
+export {
+  generateOwnershipProof,
+  verifyOwnershipProof,
+  issueCredential,
+  verifyCredential,
+  createPresentation,
+  verifyPresentation,
+  issueCapabilityCredential,
+} from './zkp.js'
+export type {
+  Commitment,
+  ProofOfKeyOwnership,
+  Claim,
+  VerifiableCredential,
+  CredentialPresentation,
+} from './zkp.js'

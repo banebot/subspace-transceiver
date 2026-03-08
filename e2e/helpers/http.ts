@@ -8,6 +8,8 @@
 export interface HealthResponse {
   status: string
   peerId: string
+  /** DID:Key identity (did:key:z...) — added in Phase 2.1 */
+  did?: string
   agentUri: string
   globalConnected: boolean
   globalPeers: number
@@ -149,6 +151,11 @@ export class DaemonClient {
     return this.req<NetworkInfoDTO[]>('GET', '/networks')
   }
 
+  /** Alias for getNetworks() */
+  async listNetworks(): Promise<NetworkInfoDTO[]> {
+    return this.getNetworks()
+  }
+
   async joinNetwork(psk: string, name?: string): Promise<NetworkInfoDTO> {
     return this.req<NetworkInfoDTO>('POST', '/networks', { psk, name })
   }
@@ -156,6 +163,8 @@ export class DaemonClient {
   async leaveNetwork(networkId: string): Promise<void> {
     return this.req<void>('DELETE', `/networks/${networkId}`)
   }
+
+
 
   async dialPskPeer(networkId: string, multiaddr: string): Promise<{ ok: boolean }> {
     return this.req<{ ok: boolean }>('POST', `/networks/${networkId}/dial`, { multiaddr })
