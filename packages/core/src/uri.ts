@@ -3,12 +3,14 @@
  *
  * FORMAT
  * ──────
- *   agent://<peerId>[/<collection>[/<slug>]]
+ *   agent://<peerId|did:key:z...>[/<collection>[/<slug>]]
  *
  * COMPONENTS
  * ──────────
- *   peerId      — libp2p PeerId string (base58btc multi-hash)
- *                 This IS the agent's public key — it is the namespace root.
+ *   peerId      — libp2p PeerId string (base58btc multi-hash) OR
+ *                 DID:Key string (did:key:z6Mk...) — both are accepted.
+ *                 The peerId in AgentURI always contains the raw identifier
+ *                 as provided (either PeerId or DID:Key).
  *   collection  — Named collection within the agent's namespace
  *                 (e.g. 'patterns', 'guides', 'project-notes')
  *   slug        — Human-readable content identifier within the collection
@@ -16,7 +18,8 @@
  *
  * EXAMPLES
  * ────────
- *   agent://12D3KooWExAmple                              → agent profile root
+ *   agent://12D3KooWExAmple                              → agent profile root (PeerId)
+ *   agent://did:key:z6Mk...                              → agent profile root (DID:Key)
  *   agent://12D3KooWExAmple/patterns                    → collection listing
  *   agent://12D3KooWExAmple/patterns/typescript-async   → specific chunk
  *
@@ -24,28 +27,35 @@
  * ────────────────────────────────────
  *   agent://<peerId>/blobs/<sha256hex>   → binary blob addressed by content hash
  *
- * RESOLUTION SEMANTICS
- * ────────────────────
- * URIs are resolved local-first (OrbitDB) then via network query to the
- * specific peer. The peerId serves as both the author identity and the
- * routing key to find the peer.
+ * BACKWARD COMPATIBILITY
+ * ──────────────────────
+ * PeerId-based URIs continue to work unchanged. DID:Key support is additive.
  */
 
 import { AgentNetError, ErrorCode } from './errors.js'
 
 export interface AgentURI {
+  /** PeerId string OR DID:Key string — whichever was provided in the URI */
   peerId: string
   collection?: string
   slug?: string
   /** Full original URI string */
   raw: string
+  /** True when the authority component is a DID:Key (did:key:z...) */
+  isDIDKey?: boolean
 }
 
 const AGENT_SCHEME = 'agent://'
 
 /**
  * Parse an agent:// URI into its components.
+ * Accepts both PeerId and DID:Key as the authority.
  * Throws AgentNetError with URI_PARSE_ERROR on malformed input.
+ *
+ * DID:Key special handling:
+ * DID:Key contains colons (did:key:z6Mk...) which would be split by the
+ * naive '/' split. We handle this by detecting the 'did:' prefix and
+ * treating the entire DID:Key as the authority before the first path segment.
  */
 export function parseAgentURI(uri: string): AgentURI {
   if (!uri.startsWith(AGENT_SCHEME)) {
@@ -56,25 +66,43 @@ export function parseAgentURI(uri: string): AgentURI {
   }
 
   const withoutScheme = uri.slice(AGENT_SCHEME.length)
-  const parts = withoutScheme.split('/').filter(Boolean)
 
-  if (parts.length === 0) {
-    throw new AgentNetError(
-      `Invalid agent URI — missing peerId: ${uri}`,
-      ErrorCode.URI_PARSE_ERROR
-    )
+  // Handle DID:Key authority: did:key:z6Mk...
+  // The DID is the part before the first '/' that isn't part of the DID itself.
+  // DID:Key format: did:key:z<base58btc>  — no '/' in the identifier itself.
+  let peerId: string
+  let rest: string
+  let isDIDKey = false
+
+  if (withoutScheme.startsWith('did:')) {
+    // Find the first '/' after the DID identifier
+    const didEnd = withoutScheme.indexOf('/')
+    if (didEnd === -1) {
+      peerId = withoutScheme
+      rest = ''
+    } else {
+      peerId = withoutScheme.slice(0, didEnd)
+      rest = withoutScheme.slice(didEnd + 1)
+    }
+    isDIDKey = true
+  } else {
+    // Standard PeerId authority
+    const parts = withoutScheme.split('/')
+    peerId = parts[0]
+    rest = parts.slice(1).join('/')
   }
-
-  const [peerId, collection, slug] = parts
 
   if (!peerId || peerId.length < 10) {
     throw new AgentNetError(
-      `Invalid agent URI — peerId is too short to be a valid libp2p PeerId: ${uri}`,
+      `Invalid agent URI — authority is too short: ${uri}`,
       ErrorCode.URI_PARSE_ERROR
     )
   }
 
-  return { peerId, collection, slug, raw: uri }
+  const pathParts = rest.split('/').filter(Boolean)
+  const [collection, slug] = pathParts
+
+  return { peerId, collection, slug, raw: uri, isDIDKey: isDIDKey || undefined }
 }
 
 /**

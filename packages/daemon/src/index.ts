@@ -27,6 +27,8 @@ import {
   type LoroEpochManager,
   RELAY_ADDRESSES,
   registerMailboxProtocol,
+  CapabilityRegistry,
+  registerNegotiateProtocol,
   createFileMailStores,
   pollMail,
   createFileRegistry,
@@ -183,6 +185,7 @@ async function main() {
   try {
     identity = await loadOrCreateIdentity(identityPath)
     console.log(`[subspace] Agent identity: ${identity.peerId}`)
+    console.log(`[subspace] Agent DID:      ${identity.did}`)
   } catch (err) {
     console.error('[subspace] Failed to load agent identity:', err)
     process.exit(1)
@@ -254,12 +257,29 @@ async function main() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Capability registry — ANP-compatible negotiation
+  // ---------------------------------------------------------------------------
+  const capabilityRegistry = new CapabilityRegistry()
+
+  // Register negotiate protocol on the global session node
+  if (globalSession) {
+    registerNegotiateProtocol(
+      globalSession.node,
+      capabilityRegistry,
+      identity.peerId,
+      identity.did,
+    )
+  }
+
   // State shared with the API
   const state: DaemonState = {
     config,
     globalSession,
     sessions,
     getPeerId: () => identity.peerId,
+    getDID: () => identity.did,
+    capabilityRegistry,
     startedAt: Date.now(),
     agentPrivateKey: identity.privateKey,
     rateLimiter: new RateLimiter({

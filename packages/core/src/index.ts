@@ -2,7 +2,7 @@
  * @subspace-net/core — public API
  *
  * Exports all public types, error classes, and functions.
- * OrbitDB internals are NOT exported — use IMemoryStore interface only.
+ * Store implementations are NOT exported — use IMemoryStore interface only.
  */
 
 // Error hierarchy
@@ -44,12 +44,16 @@ export {
 } from './crypto.js'
 export type { NetworkKeys, EncryptedEnvelope } from './crypto.js'
 
-// Agent identity (persistent per-agent Ed25519 keypair)
+// Agent identity (persistent per-agent Ed25519 keypair + DID:Key)
 export {
   loadOrCreateIdentity,
+  deriveDidKey,
+  publicKeyFromDidKey,
+  isValidDidKey,
+  generateDIDDocument,
   DEFAULT_IDENTITY_PATH,
 } from './identity.js'
-export type { AgentIdentity } from './identity.js'
+export type { AgentIdentity, DIDDocument } from './identity.js'
 
 // Chunk signing and verification
 export {
@@ -159,6 +163,23 @@ export type { CreateNodeOptions, LibP2pNodeWithPruner } from './node.js'
 // Connection pruner — disconnects inbound non-Subspace peers after graceMs
 export { SubspaceConnectionPruner } from './connection-pruner.js'
 export type { ConnectionPrunerOptions } from './connection-pruner.js'
+
+// ANP-compatible meta-protocol capability negotiation
+export {
+  NEGOTIATE_PROTOCOL,
+  CapabilityRegistry,
+  BUILT_IN_CAPABILITIES,
+  registerNegotiateProtocol,
+  queryCapabilities,
+  toANPCapability,
+  toANPAdvertisement,
+} from './negotiate.js'
+export type {
+  CapabilityDeclaration,
+  CapabilityRole,
+  NegotiateRequest,
+  NegotiateResponse,
+} from './negotiate.js'
 
 // Lexicon Protocol Registry — AT Protocol-inspired schema system
 export {

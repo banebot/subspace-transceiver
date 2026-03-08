@@ -68,6 +68,10 @@ import {
   StampCache,
   mineStamp,
   verifyStamp,
+  // Capability negotiation
+  type CapabilityDeclaration,
+  type CapabilityRegistry,
+  toANPAdvertisement,
 } from '@subspace-net/core'
 import type { PrivateKey } from '@libp2p/interface'
 import { pipe } from 'it-pipe'
@@ -87,6 +91,8 @@ export interface DaemonState {
   /** PSK-scoped private network sessions — encrypted memory sharing */
   sessions: Map<string, NetworkSession>
   getPeerId: () => string
+  /** DID:Key string for this agent (did:key:z6Mk...) */
+  getDID: () => string
   startedAt: number
   /** Agent identity private key for signing published chunks */
   agentPrivateKey: PrivateKey
@@ -104,6 +110,8 @@ export interface DaemonState {
   }
   /** Schema registry for Lexicon Protocol. */
   schemaRegistry?: ISchemaRegistry
+  /** Capability registry for ANP-compatible protocol negotiation */
+  capabilityRegistry?: CapabilityRegistry
 }
 
 // Typed duplex for protocol handler
@@ -279,6 +287,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     return reply.send({
       status: 'ok',
       peerId: state.getPeerId(),
+      did: state.getDID(),
       agentUri: `agent://${state.getPeerId()}`,
       // Global connectivity — true once the agent has peers on the open network.
       // Independent of PSK networks. False only if bootstrap/relay is unreachable.
@@ -291,6 +300,36 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       uptime: Math.floor((Date.now() - state.startedAt) / 1000),
       version: VERSION,
     })
+  })
+
+  // ---------------------------------------------------------------------------
+  // GET /capabilities — ANP-compatible capability advertisement
+  // ---------------------------------------------------------------------------
+  app.get('/capabilities', async (req, reply) => {
+    const filter = (req.query as Record<string, string>).filter
+    const caps = state.capabilityRegistry?.list(filter) ?? []
+    const response = {
+      protocolVersion: '1.0.0',
+      agentDID: state.getDID(),
+      peerId: state.getPeerId(),
+      capabilities: caps,
+      timestamp: Date.now(),
+    }
+    return reply.send(response)
+  })
+
+  // GET /capabilities/anp — ANP-formatted capability advertisement
+  app.get('/capabilities/anp', async (req, reply) => {
+    const filter = (req.query as Record<string, string>).filter
+    const caps: CapabilityDeclaration[] = state.capabilityRegistry?.list(filter) ?? []
+    const anpAdvert = toANPAdvertisement({
+      protocolVersion: '1.0.0',
+      agentDID: state.getDID(),
+      peerId: state.getPeerId(),
+      capabilities: caps,
+      timestamp: Date.now(),
+    })
+    return reply.send(anpAdvert)
   })
 
   // ---------------------------------------------------------------------------
