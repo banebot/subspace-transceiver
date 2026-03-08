@@ -271,12 +271,30 @@ async function main() {
     )
   }
 
+  // Fetch full endpoint address from the bridge (non-blocking; populated after engine start)
+  let cachedNodeAddr: { nodeId: string; relayUrl?: string; directAddrs: string[] } | null = null
+  if (globalSession?.bridge.isRunning) {
+    try {
+      const fullAddr = await globalSession.bridge.engineAddrFull()
+      cachedNodeAddr = {
+        nodeId: fullAddr.nodeId,
+        relayUrl: fullAddr.relayUrl,
+        directAddrs: fullAddr.directAddrs,
+      }
+      console.log(`[subspace] Iroh NodeId: ${fullAddr.nodeId}`)
+    } catch (err) {
+      console.warn('[subspace] Could not fetch full endpoint address:', err)
+    }
+  }
+
   // State shared with the API
   const state: DaemonState = {
     config,
     globalSession,
     sessions,
     getPeerId: () => identity.peerId,
+    getNodeId: () => globalSession?.bridge.nodeId ?? cachedNodeAddr?.nodeId ?? null,
+    getNodeAddr: () => cachedNodeAddr,
     getDID: () => identity.did,
     capabilityRegistry,
     startedAt: Date.now(),

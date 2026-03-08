@@ -8,6 +8,14 @@
 export interface HealthResponse {
   status: string
   peerId: string
+  /** Iroh NodeId — use this as `to` when sending mail. */
+  nodeId?: string
+  /** Full Iroh endpoint address for passing as address hints. */
+  nodeAddr?: {
+    nodeId: string
+    relayUrl?: string
+    directAddrs: string[]
+  }
   /** DID:Key identity (did:key:z...) — added in Phase 2.1 */
   did?: string
   agentUri: string
@@ -278,6 +286,16 @@ export class DaemonClient {
 
   async sendMail(to: string, body: string, subject?: string): Promise<{ ok: boolean; mode: string }> {
     return this.req('POST', '/mail/send', { to, body, subject })
+  }
+
+  /** Send mail with full address hints for faster Iroh connection setup. */
+  async sendMailWithHints(
+    to: string,
+    body: string,
+    subject: string | undefined,
+    toNodeAddr?: { relayUrl?: string; directAddrs?: string[] }
+  ): Promise<{ ok: boolean; mode: string }> {
+    return this.req('POST', '/mail/send', { to, body, subject, toNodeAddr })
   }
 
   async getInbox(): Promise<unknown[]> {

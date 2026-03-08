@@ -66,6 +66,31 @@ export interface PeerConnectedEvent {
   nodeId: string
 }
 
+/** Full endpoint address — NodeId + relay URL + direct IPs. */
+export interface EngineAddrFull {
+  nodeId: string
+  relayUrl?: string
+  directAddrs: string[]
+}
+
+/** Incoming mail notification from the Rust engine. */
+export interface MailReceivedEvent {
+  envelopeJson: string
+  fromNodeId: string
+}
+
+/** Parameters for sending mail via Iroh QUIC. */
+export interface MailSendParams {
+  /** Recipient's Iroh EndpointId string */
+  toNodeId: string
+  /** Full MailEnvelope serialised to JSON */
+  envelopeJson: string
+  /** Optional relay URL for the recipient (speeds up connection) */
+  toRelayUrl?: string
+  /** Optional direct addresses for the recipient (IP:port strings) */
+  toDirectAddrs?: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -251,6 +276,46 @@ export class EngineBridge extends EventEmitter {
     return result.peers
   }
 
+  /**
+   * Get the full endpoint address (NodeId + relay URL + direct IPs).
+   * Used by TypeScript to expose our address to peers for reliable connection.
+   */
+  async engineAddrFull(): Promise<EngineAddrFull> {
+    return this.call<EngineAddrFull>('engine.addrFull', {})
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mail RPC methods
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Send a mail envelope to a remote peer via Iroh QUIC.
+   * Dials the recipient's Iroh endpoint and transmits the encrypted envelope.
+   *
+   * @param params.toNodeId     Recipient's Iroh EndpointId string
+   * @param params.envelopeJson MailEnvelope serialised to JSON
+   * @param params.toRelayUrl   Optional relay URL hint for faster connection
+   * @param params.toDirectAddrs Optional direct IP:port hints
+   * @throws If connection fails or recipient rejects the message
+   */
+  async mailSend(params: MailSendParams): Promise<void> {
+    await this.call('mail.send', {
+      to_node_id: params.toNodeId,
+      envelope_json: params.envelopeJson,
+      ...(params.toRelayUrl ? { to_relay_url: params.toRelayUrl } : {}),
+      to_direct_addrs: params.toDirectAddrs ?? [],
+    })
+  }
+
+  /**
+   * Register a callback for incoming mail messages.
+   * Called when a peer sends us a mail envelope via the mailbox ALPN.
+   */
+  onMailReceived(handler: (event: MailReceivedEvent) => void): () => void {
+    this.on('mail.received', handler)
+    return () => this.off('mail.received', handler)
+  }
+
   // ---------------------------------------------------------------------------
   // Gossip RPC methods
   // ---------------------------------------------------------------------------
@@ -376,6 +441,18 @@ export class EngineBridge extends EventEmitter {
       case 'peer.disconnected':
         this.emit('peer.disconnected', notif.params)
         break
+      case 'mail.received': {
+        const params = notif.params as {
+          envelope_json: string
+          from_node_id: string
+        }
+        const event: MailReceivedEvent = {
+          envelopeJson: params.envelope_json,
+          fromNodeId: params.from_node_id,
+        }
+        this.emit('mail.received', event)
+        break
+      }
       default:
         this.emit(notif.method, notif.params)
     }

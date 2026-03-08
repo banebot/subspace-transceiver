@@ -2,30 +2,23 @@
  * /subspace/mailbox/1.0.0 — Iroh ALPN protocol for store-and-forward mail.
  *
  * This module handles both sides of the mailbox protocol:
- *   - Server side: handle incoming deposit/check/ack requests from peers
- *   - Client side: send mail to a peer (direct or via relay)
+ *   - Server side: handle incoming mail received notifications from the engine
+ *   - Client side: send mail to a peer via the Iroh engine bridge
  *
- * Transport: Iroh QUIC via `/subspace/mailbox/1.0.0` ALPN (registered in the
- * Rust engine, bridged back to Node.js via EngineBridge).
- *
- * For Phase 3.5, the server side is handled via the HTTP API (peers send
- * mail through the daemon HTTP API). Direct peer-to-peer delivery will be
- * implemented in Phase 3.6 using Iroh ALPN streams.
+ * Transport: Iroh QUIC via `/subspace/mailbox/1.0.0` ALPN (implemented in Rust,
+ * bridged back to Node.js via EngineBridge notifications).
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { EngineBridge } from './engine-bridge.js'
+import type { EngineBridge, MailReceivedEvent } from './engine-bridge.js'
 import {
   MAILBOX_PROTOCOL,
   type MailEnvelope,
-  type MailMessage,
   type MailPayload,
   type InboxMessage,
   type OutboxMessage,
   encryptMailPayload,
-  decryptMailEnvelope,
   signEnvelope,
-  verifyEnvelopeSignature,
   createEnvelope,
   isEnvelopeExpired,
 } from './mail.js'
@@ -67,24 +60,60 @@ export interface MailboxHandlerOptions {
 /**
  * Register the mailbox protocol handler.
  *
- * In the Iroh architecture, the actual ALPN handler runs in the Rust engine.
- * The engine forwards mail messages back to Node.js via the bridge.
- * For Phase 3.5, the mailbox is accessible via the HTTP API.
+ * The actual ALPN handler runs in the Rust engine. The engine forwards
+ * incoming mail messages back to Node.js via the bridge as `mail.received`
+ * notifications. This function wires those notifications to the inbox store.
  *
- * This function is a stub that sets up the local relay/inbox stores.
- * Full Iroh ALPN implementation follows in Phase 3.6.
- *
- * @param _bridge  EngineBridge (future: register ALPN handler)
- * @param opts     Mailbox handler options
+ * @param bridge  EngineBridge — listens for mail.received notifications
+ * @param opts    Mailbox handler options
+ * @returns Cleanup function to remove the handler
  */
 export async function registerMailboxProtocol(
-  _bridge: EngineBridge | null,
+  bridge: EngineBridge | null,
   opts: MailboxHandlerOptions,
-): Promise<void> {
-  // Phase 3.6: Register /subspace/mailbox/1.0.0 ALPN handler via EngineBridge
-  // and wire incoming messages to relayStore/inboxStore.
-  // For now, the HTTP API handles mail delivery directly.
-  void opts
+): Promise<() => void> {
+  if (!bridge) {
+    // No bridge — no-op (engine not running in this mode)
+    return () => {}
+  }
+
+  const cleanup = bridge.onMailReceived(async (event: MailReceivedEvent) => {
+    try {
+      // Parse the envelope
+      let envelope: MailEnvelope
+      try {
+        envelope = JSON.parse(event.envelopeJson) as MailEnvelope
+      } catch {
+        console.warn('[mailbox] Received malformed envelope JSON from', event.fromNodeId)
+        return
+      }
+
+      // Check expiry
+      if (isEnvelopeExpired(envelope)) {
+        console.warn('[mailbox] Received expired envelope from', event.fromNodeId)
+        return
+      }
+
+      // Store in inbox. We store the raw envelope body since decryption requires
+      // the sender's libp2p PeerId format which may differ from Iroh NodeId.
+      // The HTTP API exposes the envelope for the client to decrypt.
+      const inboxMsg: InboxMessage = {
+        id: uuidv4(),
+        from: envelope.from,
+        subject: envelope.contentType ?? '(encrypted)',
+        body: event.envelopeJson,  // raw envelope JSON for the client to decrypt
+        receivedAt: Date.now(),
+        timestamp: Date.now(),
+        envelopeId: envelope.id,
+      }
+      await opts.inboxStore.save(inboxMsg)
+      console.log(`[mailbox] Message from ${event.fromNodeId} saved to inbox.`)
+    } catch (err) {
+      console.error('[mailbox] Error handling incoming mail:', err)
+    }
+  })
+
+  return cleanup
 }
 
 // ---------------------------------------------------------------------------
@@ -102,50 +131,54 @@ export interface SendMailOptions {
   /** Relay peer EndpointIds to try if recipient is offline */
   relayPeers?: string[]
   outboxStore?: IOutboxStore
+  /**
+   * Full address hints for the recipient (relay URL + direct IPs).
+   * Providing these dramatically speeds up connection setup.
+   */
+  recipientAddrHints?: {
+    relayUrl?: string
+    directAddrs?: string[]
+  }
 }
 
 /**
- * Send a mail message to a specific agent.
+ * Send a mail message to a specific agent via Iroh QUIC.
  *
- * Tries direct Iroh QUIC delivery first; if the recipient is offline,
- * deposits with relay peers. In Phase 3.6, this will use Iroh ALPN streams.
- * For Phase 3.5, only relay deposit via HTTP is implemented.
+ * Constructs a plain JSON envelope (unencrypted for now — encryption requires
+ * matching key derivation between libp2p and Iroh identity formats).
  *
- * @returns 'direct' if delivered directly, 'relay' if deposited with relay(s)
+ * @returns 'direct' if delivered directly
+ * @throws If delivery fails
  */
 export async function sendMail(
-  _bridge: EngineBridge | null,
+  bridge: EngineBridge | null,
   recipientPeerId: string,
   opts: SendMailOptions,
 ): Promise<'direct' | 'relay'> {
   const envelopeId = uuidv4()
 
-  // Encrypt the payload
-  const encrypted = await encryptMailPayload(
-    opts.payload,
-    opts.senderKey as Parameters<typeof encryptMailPayload>[1],
-    opts.recipientPeerId,
-    envelopeId,
-  )
-
-  // Create and sign the envelope
-  const unsignedEnvelope = createEnvelope({
+  // Build a simple unencrypted envelope for initial delivery proof.
+  // The payload is serialized directly as JSON.
+  // TODO: Re-enable encryption once key format is unified between libp2p and Iroh.
+  const envelope: MailEnvelope = {
+    id: envelopeId,
     from: opts.senderPeerId,
-    to: opts.recipientPeerId,
-    envelopeId,
-    encrypted,
-    ttl: opts.ttl,
-    contentType: opts.contentType,
-  })
-  const envelope = await signEnvelope(
-    unsignedEnvelope,
-    opts.senderKey as Parameters<typeof signEnvelope>[1]
-  )
+    to: recipientPeerId,
+    timestamp: Date.now(),
+    contentType: opts.contentType ?? opts.payload.subject ?? 'text/plain',
+    // For unencrypted mode: store payload directly in a plaintext wrapper
+    payload: Buffer.from(JSON.stringify(opts.payload), 'utf8').toString('base64'),
+    ephemeralPubKey: '',
+    nonce: '',
+    authTag: '',
+    signature: '',
+    ttl: opts.ttl ?? 604800,
+  }
 
   // Record in outbox
   const outboxMsg: OutboxMessage = {
     id: uuidv4(),
-    to: opts.recipientPeerId,
+    to: recipientPeerId,
     subject: opts.payload.subject,
     body: opts.payload.body,
     contentType: opts.contentType,
@@ -155,33 +188,33 @@ export async function sendMail(
   }
   await opts.outboxStore?.save(outboxMsg)
 
-  // Phase 3.6: Try direct Iroh QUIC delivery first
-  // For now, fall through to relay path
-
-  // If no relay peers, throw
-  if (!opts.relayPeers || opts.relayPeers.length === 0) {
-    throw new Error(
-      `Could not deliver mail to ${recipientPeerId}: ` +
-      `direct Iroh delivery not yet implemented (Phase 3.6), ` +
-      `and no relay peers configured`
-    )
+  // Try direct Iroh QUIC delivery via the engine bridge
+  if (bridge?.isRunning) {
+    try {
+      await bridge.mailSend({
+        toNodeId: recipientPeerId,
+        envelopeJson: JSON.stringify(envelope),
+        toRelayUrl: opts.recipientAddrHints?.relayUrl,
+        toDirectAddrs: opts.recipientAddrHints?.directAddrs,
+      })
+      await opts.outboxStore?.updateStatus(outboxMsg.id, 'sent')
+      return 'direct'
+    } catch (err) {
+      console.warn('[mailbox] Direct delivery failed:', err)
+      // Fall through to error
+    }
   }
 
-  // Try relay peers (via HTTP relay API for now)
-  // Phase 3.6 will use Iroh ALPN streams for P2P relay delivery
-  const depositMsg: MailMessage = { type: 'deposit', envelope }
-
-  // Stub relay delivery — in a real deployment this would POST to the relay peer's HTTP API
-  // For now, record as "sent" optimistically
-  await opts.outboxStore?.updateStatus(outboxMsg.id, 'sent')
-  return 'relay'
+  throw new Error(
+    `Could not deliver mail to ${recipientPeerId}: ` +
+    `engine bridge ${bridge ? 'returned an error' : 'unavailable'}. ` +
+    `Message saved in outbox as pending.`
+  )
 }
 
 /**
  * Poll relay peers for pending mail addressed to this agent.
- *
- * Phase 3.6 implementation will use Iroh ALPN streams.
- * For Phase 3.5, polling is handled via the HTTP API.
+ * Push-based delivery via Iroh ALPN — no polling needed.
  *
  * @returns Count of new messages received
  */
@@ -196,6 +229,6 @@ export async function pollMail(
     limit?: number
   }
 ): Promise<number> {
-  // Phase 3.6: poll relay peers via Iroh ALPN
+  // Push-based delivery via Iroh ALPN — no polling needed.
   return 0
 }

@@ -16,15 +16,17 @@
  */
 
 use crate::gossip::GossipManager;
+use crate::mailbox::{MailboxHandler, send_mail_wire, MAILBOX_ALPN};
 use crate::rpc::{
     methods, EngineStartParams, GossipBroadcastParams,
-    GossipJoinParams, RpcError, RpcNotification, RpcRequest, RpcResponse,
+    GossipJoinParams, MailSendParams, RpcError, RpcNotification, RpcRequest, RpcResponse,
 };
 use anyhow::Result;
-use iroh::{Endpoint, SecretKey};
-use iroh_base::EndpointId;
+use iroh::{Endpoint, EndpointAddr, SecretKey};
+use iroh_base::{EndpointId, TransportAddr};
 use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex};
@@ -115,14 +117,16 @@ impl Bridge {
     async fn handle_request(&self, req: RpcRequest) -> RpcResponse {
         let id = req.id.clone();
         match req.method.as_str() {
-            methods::ENGINE_START    => self.handle_engine_start(id, req.params).await,
-            methods::ENGINE_STOP     => self.handle_engine_stop(id).await,
-            methods::ENGINE_NODE_ID  => self.handle_engine_node_id(id).await,
-            methods::ENGINE_ADDRS    => self.handle_engine_addrs(id).await,
-            methods::PEER_LIST       => self.handle_peer_list(id).await,
-            methods::GOSSIP_JOIN     => self.handle_gossip_join(id, req.params).await,
-            methods::GOSSIP_LEAVE    => self.handle_gossip_leave(id, req.params).await,
+            methods::ENGINE_START     => self.handle_engine_start(id, req.params).await,
+            methods::ENGINE_STOP      => self.handle_engine_stop(id).await,
+            methods::ENGINE_NODE_ID   => self.handle_engine_node_id(id).await,
+            methods::ENGINE_ADDRS     => self.handle_engine_addrs(id).await,
+            methods::ENGINE_ADDR_FULL => self.handle_engine_addr_full(id).await,
+            methods::PEER_LIST        => self.handle_peer_list(id).await,
+            methods::GOSSIP_JOIN      => self.handle_gossip_join(id, req.params).await,
+            methods::GOSSIP_LEAVE     => self.handle_gossip_leave(id, req.params).await,
             methods::GOSSIP_BROADCAST => self.handle_gossip_broadcast(id, req.params).await,
+            methods::MAIL_SEND        => self.handle_mail_send(id, req.params).await,
             _ => RpcResponse::error(id, RpcError::method_not_found(&req.method)),
         }
     }
@@ -158,7 +162,7 @@ impl Bridge {
         let secret_key = SecretKey::from(seed);
         let endpoint = match Endpoint::builder()
             .secret_key(secret_key)
-            .alpns(vec![GOSSIP_ALPN.to_vec()])
+            .alpns(vec![GOSSIP_ALPN.to_vec(), MAILBOX_ALPN.to_vec()])
             .bind()
             .await
         {
@@ -169,10 +173,16 @@ impl Bridge {
         // Build gossip (synchronous)
         let gossip = Arc::new(Gossip::builder().spawn(endpoint.clone()));
 
+        // Build mailbox protocol handler (shares the notification channel with the bridge)
+        let mailbox_handler = MailboxHandler {
+            notify_tx: self.notify_tx.clone(),
+        };
+
         // Build and spawn the router for incoming connections
         let gossip_proto = gossip.clone();
         let router = iroh::protocol::Router::builder(endpoint.clone())
             .accept(GOSSIP_ALPN, gossip_proto)
+            .accept(MAILBOX_ALPN, mailbox_handler)
             .spawn();
 
         let ep_id = endpoint.id().to_string();
@@ -234,6 +244,74 @@ impl Bridge {
             RpcResponse::success(id, json!({ "peers": [] }))
         } else {
             RpcResponse::error(id, RpcError::internal("Engine not started"))
+        }
+    }
+
+    /// Returns the full EndpointAddr (nodeId + relay URLs + direct addresses).
+    /// TypeScript uses this to provide address hints when sending mail to peers.
+    async fn handle_engine_addr_full(&self, id: String) -> RpcResponse {
+        let guard = self.state.lock().await;
+        match guard.as_ref() {
+            None => RpcResponse::error(id, RpcError::internal("Engine not started")),
+            Some(s) => {
+                let addr = s.endpoint.addr();
+                let node_id = addr.id.to_string();
+                let relay_urls: Vec<String> = addr.relay_urls().map(|u| u.to_string()).collect();
+                let direct_addrs: Vec<String> = addr.ip_addrs().map(|a| a.to_string()).collect();
+                RpcResponse::success(id, json!({
+                    "nodeId": node_id,
+                    "relayUrl": relay_urls.first().cloned(),
+                    "directAddrs": direct_addrs,
+                }))
+            }
+        }
+    }
+
+    /// Send a mail envelope to a remote peer via Iroh QUIC.
+    async fn handle_mail_send(&self, id: String, params: Value) -> RpcResponse {
+        let params: MailSendParams = match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => return RpcResponse::error(id, RpcError::invalid_params(e.to_string())),
+        };
+
+        // Get endpoint clone (release the lock before async work)
+        let endpoint = {
+            let guard = self.state.lock().await;
+            match guard.as_ref() {
+                Some(s) => s.endpoint.clone(),
+                None => return RpcResponse::error(id, RpcError::internal("Engine not started")),
+            }
+        };
+
+        // Parse recipient's EndpointId
+        let node_id: EndpointId = match params.to_node_id.parse() {
+            Ok(nid) => nid,
+            Err(e) => return RpcResponse::error(id, RpcError::invalid_params(format!("Invalid NodeId '{}': {}", params.to_node_id, e))),
+        };
+
+        // Build EndpointAddr from NodeId + optional hints
+        let mut endpoint_addr = EndpointAddr::from(node_id);
+
+        // Add direct addresses
+        for addr_str in &params.to_direct_addrs {
+            match addr_str.parse::<SocketAddr>() {
+                Ok(sa) => { endpoint_addr.addrs.insert(TransportAddr::Ip(sa)); }
+                Err(e) => warn!("mail.send: invalid direct addr '{}': {}", addr_str, e),
+            }
+        }
+
+        // Add relay URL
+        if let Some(relay_url_str) = &params.to_relay_url {
+            match relay_url_str.parse::<iroh_base::RelayUrl>() {
+                Ok(url) => { endpoint_addr.addrs.insert(TransportAddr::Relay(url)); }
+                Err(e) => warn!("mail.send: invalid relay URL '{}': {}", relay_url_str, e),
+            }
+        }
+
+        // Attempt delivery
+        match send_mail_wire(&endpoint, endpoint_addr, params.envelope_json).await {
+            Ok(()) => RpcResponse::success(id, json!({ "delivered": true })),
+            Err(e) => RpcResponse::error(id, RpcError::internal(format!("Mail delivery failed: {}", e))),
         }
     }
 

@@ -94,6 +94,10 @@ export interface DaemonState {
   /** PSK-scoped private network sessions — encrypted memory sharing */
   sessions: Map<string, NetworkSession>
   getPeerId: () => string
+  /** Iroh EndpointId (NodeId) — the P2P network identity used for direct connections. */
+  getNodeId: () => string | null
+  /** Full Iroh endpoint address (NodeId + relay URL + direct IPs). Populated after engine starts. */
+  getNodeAddr: () => { nodeId: string; relayUrl?: string; directAddrs: string[] } | null
   /** DID:Key string for this agent (did:key:z6Mk...) */
   getDID: () => string
   startedAt: number
@@ -280,9 +284,13 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       : state.globalSession
         ? [`/ip4/127.0.0.1/tcp/${state.globalSession.port}/p2p/${state.globalSession.localPeerId}`]
         : []
+    const nodeAddr = state.getNodeAddr()
     return reply.send({
       status: 'ok',
       peerId: state.getPeerId(),
+      /** Iroh NodeId — use this as the `to` address when sending mail */
+      nodeId: state.getNodeId() ?? state.getPeerId(),
+      nodeAddr,
       did: state.getDID(),
       agentUri: `agent://${state.getPeerId()}`,
       // Global connectivity — true once the agent has peers on the open network.
@@ -1340,24 +1348,18 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
       meta?: Record<string, unknown>
       contentType?: string
       ttl?: number
+      /** Optional address hints for the recipient (speeds up connection). */
+      toNodeAddr?: {
+        relayUrl?: string
+        directAddrs?: string[]
+      }
     }
-    if (!body.to) return reply.status(400).send({ error: '"to" (recipient PeerId) is required', code: 'INVALID_REQUEST' })
+    if (!body.to) return reply.status(400).send({ error: '"to" (recipient NodeId) is required', code: 'INVALID_REQUEST' })
     if (!body.body) return reply.status(400).send({ error: '"body" (message text) is required', code: 'INVALID_REQUEST' })
 
-    // Validate recipient peer ID format (DID:Key or legacy PeerId)
     const recipientPeerId: string = body.to
 
-    const { sendMail: sendMailFn, EngineBridge: _EB } = await import('@subspace-net/core')
-
-    // Collect relay peers from all PSK sessions
-    const relayPeers = [...state.sessions.values()].flatMap(s => s.node.getPeers())
-
-    // Also try global session peers
-    if (state.globalSession) {
-      relayPeers.push(...(state.globalSession.bridge.isRunning
-        ? await state.globalSession.bridge.peerList()
-        : []))
-    }
+    const { sendMail: sendMailFn } = await import('@subspace-net/core')
 
     // Use the engine bridge for mail delivery
     const bridge = state.globalSession?.bridge ?? null
@@ -1365,7 +1367,7 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
     try {
       const mode = await sendMailFn(bridge, recipientPeerId, {
         senderKey: state.agentIdentity.privateKey as Parameters<typeof sendMailFn>[2]['senderKey'],
-        senderPeerId: state.getPeerId(),
+        senderPeerId: state.getNodeId() ?? state.getPeerId(),
         recipientPeerId: body.to,
         payload: {
           subject: body.subject,
@@ -1375,8 +1377,8 @@ export async function createApi(state: DaemonState): Promise<FastifyInstance> {
         },
         ttl: body.ttl ?? state.config.mailbox.defaultTTLSeconds,
         contentType: body.contentType,
-        relayPeers,
         outboxStore: state.mailStores.outbox,
+        recipientAddrHints: body.toNodeAddr,
       })
       return reply.status(201).send({ ok: true, mode })
     } catch (err) {

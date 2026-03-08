@@ -107,10 +107,15 @@ pub mod methods {
     pub const GOSSIP_LEAVE: &str = "gossip.leave";
     pub const GOSSIP_BROADCAST: &str = "gossip.broadcast";
 
+    // Mail
+    pub const MAIL_SEND: &str = "mail.send";
+    pub const ENGINE_ADDR_FULL: &str = "engine.addrFull";
+
     // Notifications (Rust → Node.js)
     pub const NOTIFY_PEER_CONNECTED: &str = "peer.connected";
     pub const NOTIFY_PEER_DISCONNECTED: &str = "peer.disconnected";
     pub const NOTIFY_GOSSIP_RECEIVED: &str = "gossip.received";
+    pub const NOTIFY_MAIL_RECEIVED: &str = "mail.received";
     pub const NOTIFY_READY: &str = "engine.ready";
 }
 
@@ -154,4 +159,19 @@ pub struct ConnectPeerParams {
     /// Optional direct addresses (IP:port)
     #[serde(default)]
     pub direct_addrs: Vec<String>,
+}
+
+/// Parameters for `mail.send`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailSendParams {
+    /// Recipient's Iroh EndpointId (string form)
+    pub to_node_id: String,
+    /// The MailEnvelope serialised to a JSON string
+    pub envelope_json: String,
+    /// Optional relay URL for the recipient (speeds up connection)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_relay_url: Option<String>,
+    /// Optional direct addresses for the recipient (IP:port strings)
+    #[serde(default)]
+    pub to_direct_addrs: Vec<String>,
 }
