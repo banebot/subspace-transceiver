@@ -93,6 +93,8 @@ export class EngineBridge extends EventEmitter {
   private started = false
   private readonly enginePath: string
   private readonly logStderr: boolean
+  /** Cached Iroh NodeId (set after engineStart) */
+  public nodeId: string | null = null
 
   constructor(options: EngineBridgeOptions = {}) {
     super()
@@ -223,10 +225,12 @@ export class EngineBridge extends EventEmitter {
    * The seed is the same 32-byte secret as the agent's identity key.
    */
   async engineStart(params: { seedHex: string; relayUrl?: string }): Promise<EngineStartResult> {
-    return this.call<EngineStartResult>('engine.start', {
+    const result = await this.call<EngineStartResult>('engine.start', {
       seed_hex: params.seedHex,
       ...(params.relayUrl ? { relay_url: params.relayUrl } : {}),
     })
+    this.nodeId = result.nodeId
+    return result
   }
 
   /** Get the engine's current NodeId (Iroh EndpointId as string). */

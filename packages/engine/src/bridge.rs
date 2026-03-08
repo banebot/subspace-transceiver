@@ -27,7 +27,7 @@ use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
 
 /// State held after `engine.start` succeeds.
@@ -40,13 +40,19 @@ struct EngineState {
 pub struct Bridge {
     state: Arc<Mutex<Option<EngineState>>>,
     gossip_manager: Arc<Mutex<GossipManager>>,
+    /// Channel for sending notifications to the stdout writer task.
+    notify_tx: mpsc::UnboundedSender<RpcNotification>,
+    notify_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<RpcNotification>>>>,
 }
 
 impl Bridge {
     pub fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
         Self {
             state: Arc::new(Mutex::new(None)),
             gossip_manager: Arc::new(Mutex::new(GossipManager::new())),
+            notify_tx: tx,
+            notify_rx: Arc::new(Mutex::new(Some(rx))),
         }
     }
 
@@ -57,30 +63,49 @@ impl Bridge {
         let mut reader = BufReader::new(stdin).lines();
 
         // Announce readiness
-        self.send_notification(
+        write_line(
             &mut stdout,
-            RpcNotification::new(methods::NOTIFY_READY, json!({"version": "0.1.0"})),
+            &serde_json::to_string(&RpcNotification::new(
+                methods::NOTIFY_READY,
+                json!({"version": "0.1.0"}),
+            ))?,
         )
         .await?;
 
-        while let Some(line) = reader.next_line().await? {
-            let line = line.trim().to_string();
-            if line.is_empty() {
-                continue;
-            }
+        // Take the notification receiver (only once)
+        let notify_rx = {
+            let mut guard = self.notify_rx.lock().await;
+            guard.take()
+        };
+        let mut notify_rx = notify_rx.expect("run() called twice");
 
-            let response = match serde_json::from_str::<RpcRequest>(&line) {
-                Ok(req) => self.handle_request(req).await,
-                Err(e) => {
-                    warn!("Malformed JSON-RPC: {} (input: {})", e, &line[..line.len().min(120)]);
-                    continue;
+        loop {
+            tokio::select! {
+                // Handle stdin requests
+                line = reader.next_line() => {
+                    match line? {
+                        Some(line) => {
+                            let line = line.trim().to_string();
+                            if line.is_empty() { continue; }
+
+                            let response = match serde_json::from_str::<RpcRequest>(&line) {
+                                Ok(req) => self.handle_request(req).await,
+                                Err(e) => {
+                                    warn!("Malformed JSON-RPC: {} (input: {})", e, &line[..line.len().min(120)]);
+                                    continue;
+                                }
+                            };
+
+                            write_line(&mut stdout, &serde_json::to_string(&response)?).await?;
+                        }
+                        None => break, // stdin closed
+                    }
                 }
-            };
-
-            let json = serde_json::to_string(&response).unwrap_or_default();
-            stdout.write_all(json.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
-            stdout.flush().await?;
+                // Handle outbound notifications (gossip messages, peer events)
+                Some(notification) = notify_rx.recv() => {
+                    write_line(&mut stdout, &serde_json::to_string(&notification)?).await?;
+                }
+            }
         }
 
         Ok(())
@@ -234,7 +259,27 @@ impl Bridge {
 
         let gm = self.gossip_manager.lock().await;
         match gm.join(&params.topic_hex, bootstrap_peers).await {
-            Ok(_receiver) => {
+            Ok(mut receiver) => {
+                // Spawn a task to forward incoming gossip messages as notifications
+                let notify_tx = self.notify_tx.clone();
+                tokio::spawn(async move {
+                    use base64::Engine as _;
+                    while let Some(msg) = receiver.recv().await {
+                        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&msg.payload);
+                        let notification = RpcNotification::new(
+                            methods::NOTIFY_GOSSIP_RECEIVED,
+                            json!({
+                                "topicHex": msg.topic_hex,
+                                "payload": payload_b64,
+                                "fromNodeId": msg.from_node_id,
+                            }),
+                        );
+                        if notify_tx.send(notification).is_err() {
+                            break; // Bridge shutting down
+                        }
+                    }
+                });
+
                 RpcResponse::success(id, json!({ "joined": true, "topic": params.topic_hex }))
             }
             Err(e) => RpcResponse::error(id, RpcError::internal(e.to_string())),
@@ -272,22 +317,14 @@ impl Bridge {
             Err(e) => RpcResponse::error(id, RpcError::internal(e.to_string())),
         }
     }
+}
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    async fn send_notification(
-        &self,
-        stdout: &mut tokio::io::Stdout,
-        notification: RpcNotification,
-    ) -> Result<()> {
-        let json = serde_json::to_string(&notification)?;
-        stdout.write_all(json.as_bytes()).await?;
-        stdout.write_all(b"\n").await?;
-        stdout.flush().await?;
-        Ok(())
-    }
+/// Write a line to stdout (newline + flush).
+async fn write_line(stdout: &mut tokio::io::Stdout, line: &str) -> Result<()> {
+    stdout.write_all(line.as_bytes()).await?;
+    stdout.write_all(b"\n").await?;
+    stdout.flush().await?;
+    Ok(())
 }
 
 impl Default for Bridge {

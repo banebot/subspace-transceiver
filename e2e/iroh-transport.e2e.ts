@@ -116,13 +116,13 @@ describe('network join uses AgentIdentity (Iroh-based)', () => {
     const chunk = await harness.client('alpha').putMemory({
       content: 'Iroh transport test chunk',
       collection: 'iroh-test',
-      tags: ['iroh', 'phase3'],
+      topic: ['iroh', 'phase3'],
     })
     expect(chunk.id).toBeTruthy()
 
     const retrieved = await harness.client('alpha').getMemory(chunk.id)
     expect(retrieved.content).toBe('Iroh transport test chunk')
-    expect(retrieved.tags).toContain('iroh')
+    expect(retrieved.topic).toContain('iroh')
   })
 
   it('can leave a PSK network', async () => {

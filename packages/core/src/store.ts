@@ -23,6 +23,7 @@ import type { MemoryChunk, MemoryQuery } from './schema.js'
  */
 export interface MemoryStoreEvents {
   replicated: []
+  changed: []
   error: [error: Error]
 }
 

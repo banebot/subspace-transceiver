@@ -119,6 +119,7 @@ export class LoroMemoryStore extends EventEmitter implements IMemoryStore {
       map.set(chunk.id, serialized)
       this.doc.commit()
       this.scheduleSave()
+      this.emit('changed')
     } catch (err) {
       throw new StoreError(
         `Failed to write chunk ${chunk.id}: ${String(err)}`,
@@ -193,6 +194,7 @@ export class LoroMemoryStore extends EventEmitter implements IMemoryStore {
       map.set(id, JSON.stringify(tombstone))
       this.doc.commit()
       this.scheduleSave()
+      this.emit('changed')
     } catch (err) {
       throw new StoreError(
         `Failed to tombstone chunk ${id}: ${String(err)}`,

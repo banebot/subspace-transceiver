@@ -116,7 +116,8 @@ export class LoroEpochManager extends EventEmitter implements IMemoryStore {
   // ---------------------------------------------------------------------------
 
   async put(chunk: MemoryChunk): Promise<void> {
-    return this.currentStore().put(chunk)
+    await this.currentStore().put(chunk)
+    this.emit('changed')
   }
 
   async get(id: string): Promise<MemoryChunk | null> {
@@ -154,11 +155,13 @@ export class LoroEpochManager extends EventEmitter implements IMemoryStore {
       const chunk = await store.get(id).catch(() => null)
       if (chunk) {
         await store.forget(id)
+        this.emit('changed')
         return
       }
     }
     // Not found in any epoch — tombstone in current epoch as a no-op
     await this.currentStore().forget(id)
+    this.emit('changed')
   }
 
   async close(): Promise<void> {

@@ -23,6 +23,7 @@ import { deriveNetworkKeys, validatePSK, type NetworkKeys } from './crypto.js'
 import type { AgentIdentity } from './identity.js'
 import { getDefaultBridge, EngineBridge } from './engine-bridge.js'
 import { DiscoveryManager } from './discovery.js'
+import { ReplicationManager } from './replication.js'
 import { LoroEpochManager } from './loro-epoch-manager.js'
 import { DEFAULT_EPOCH_CONFIG, type EpochConfig } from './epoch-manager.js'
 import type { IMemoryStore } from './store.js'
@@ -64,6 +65,8 @@ export interface NetworkSession {
   }
   /** In-memory backlink index */
   backlinkIndex: BacklinkIndex
+  /** Loro delta sync replication manager */
+  replication?: ReplicationManager
   /** Discovery/browse manager */
   discovery: DiscoveryManager
   /** Derived keys for this network */
@@ -206,6 +209,17 @@ export async function joinNetwork(
     // PeerId compat shim (Phase 3.6 migrates this to Iroh EndpointId)
     const localPeerIdStr = identity.did ?? identity.peerId
 
+    // Start Loro delta sync replication via gossip
+    // Use the bridge's nodeId if available, otherwise fall back to peerId
+    const replicationNodeId = bridge.nodeId ?? localPeerIdStr
+    const replication = new ReplicationManager(
+      bridge,
+      { skill: skillManager, project: projectManager },
+      gossipTopicHex,
+      replicationNodeId,
+    )
+    replication.start()
+
     const session: NetworkSession = {
       id: networkId,
       name: options.name,
@@ -216,6 +230,7 @@ export async function joinNetwork(
       epochManagers: { skill: skillManager, project: projectManager },
       backlinkIndex,
       discovery,
+      replication,
       networkKeys,
       identity,
       // Compatibility shim for daemon API layer (Phase 3.6 removes this)
@@ -246,6 +261,7 @@ export async function leaveNetwork(session: NetworkSession): Promise<void> {
   const errors: unknown[] = []
 
   session.pruner?.stop()
+  session.replication?.stop()
 
   await session.discovery.stop().catch((e: unknown) => errors.push(e))
 
