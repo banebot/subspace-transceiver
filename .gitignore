@@ -3,6 +3,9 @@ _bmad/
 node_modules/
 dist/
 bin/
+# Rust build artifacts
+target/
+packages/engine/target/
 *.js.map
 *.d.ts.map
 # Compiled output that may land in src/ during incremental tsc --build runs
