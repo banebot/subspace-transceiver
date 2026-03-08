@@ -143,6 +143,16 @@ export class DaemonClient {
     return data as T
   }
 
+  /** Generic POST helper for arbitrary endpoints */
+  async post<T = Record<string, unknown>>(path: string, body?: unknown): Promise<T> {
+    return this.req<T>('POST', path, body)
+  }
+
+  /** Generic GET helper for arbitrary endpoints */
+  async get<T = Record<string, unknown>>(path: string): Promise<T> {
+    return this.req<T>('GET', path)
+  }
+
   async getHealth(): Promise<HealthResponse> {
     return this.req<HealthResponse>('GET', '/health')
   }
